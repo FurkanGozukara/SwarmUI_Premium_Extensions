@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using FreneticUtilities.FreneticExtensions;
@@ -17,72 +17,337 @@ public class Ltxv2LatentUpscaleExtension : Extension
     public override void OnInit()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds LTXV2 latent upscaler flow for Refiner Upscale in video pipelines.";
+        Description = "Adds LTXV2 latent upscaler support for Image-to-Video workflows only.";
         License = "MIT";
-        Version = "0.1.0";
+        Version = "0.5.1";
 
         if (_patched)
         {
+            Logs.Info("LTXV2 I2V Latent Upscale extension already patched.");
             return;
         }
         _patched = true;
 
         PatchWorkflowSteps();
+        Logs.Info("LTXV2 I2V Latent Upscale extension initialized - only affects LTXV2 Image-to-Video with latent upscaling.");
     }
 
     private static void PatchWorkflowSteps()
     {
         _ = WorkflowGenerator.Steps;
 
-        ReplaceStep(11, PatchedImageToVideoStep);
-        ReplaceStep(12, PatchedExtendVideoStep);
-        ReplaceLastStep(-4, PatchedRefinerStep);
-    }
-
-    private static void ReplaceStep(double priority, Action<WorkflowGenerator> newAction)
-    {
+        // Find and wrap the ImageToVideo step (priority 11)
         List<WorkflowGenerator.WorkflowGenStep> steps = WorkflowGenerator.Steps;
-        int index = steps.FindIndex(step => Math.Abs(step.Priority - priority) < 0.0001);
-        if (index < 0)
+        int i2vIndex = steps.FindIndex(step => Math.Abs(step.Priority - 11) < 0.0001);
+        
+        if (i2vIndex >= 0)
         {
-            Logs.Warning($"Ltxv2LatentUpscaleExtension could not find workflow step priority {priority} to replace.");
-            return;
+            var originalI2VAction = steps[i2vIndex].Action;
+            steps[i2vIndex] = new WorkflowGenerator.WorkflowGenStep(g =>
+            {
+                // Save reference to original image BEFORE I2V encoding modifies it
+                JArray originalInputImage = g.FinalImageOut != null ? new JArray(g.FinalImageOut) : null;
+
+                // Check if we should use upscale workflow
+                bool shouldUpscale = ShouldApplyI2VUpscale(g);
+
+                if (shouldUpscale)
+                {
+                    Logs.Info("Using upscale workflow, skipping base I2V workflow");
+                    // Don't call originalI2VAction - we'll create complete workflow in upscale
+                    TryApplyLtxv2I2VUpscale(g, originalInputImage, null);
+                }
+                else
+                {
+                    // Normal I2V workflow without upscaling
+                    originalI2VAction(g);
+                }
+            }, 11);
+            Logs.Debug("Wrapped ImageToVideo step (priority 11)");
         }
-        steps[index] = new WorkflowGenerator.WorkflowGenStep(newAction, priority);
+        else
+        {
+            Logs.Warning("Could not find ImageToVideo step to patch");
+        }
+
+        // Find and wrap the Refiner step (last priority -4)
+        int refinerIndex = steps.FindLastIndex(step => Math.Abs(step.Priority - (-4)) < 0.0001);
+
+        if (refinerIndex >= 0)
+        {
+            var originalRefinerAction = steps[refinerIndex].Action;
+            steps[refinerIndex] = new WorkflowGenerator.WorkflowGenStep(g =>
+            {
+                // Skip refiner ONLY for LTXV2 I2V with latent upscaling
+                if (ShouldSkipRefinerForLtxv2I2V(g))
+                {
+                    Logs.Info("Skipping refiner for LTXV2 I2V with latent upscaling (handled in video workflow)");
+                    return;
+                }
+
+                // Otherwise run original refiner
+                originalRefinerAction(g);
+            }, -4);
+            Logs.Debug("Wrapped Refiner step (priority -4)");
+        }
+        else
+        {
+            Logs.Warning("Could not find Refiner step to patch");
+        }
+
         WorkflowGenerator.Steps = [.. steps.OrderBy(step => step.Priority)];
     }
 
-    private static void ReplaceLastStep(double priority, Action<WorkflowGenerator> newAction)
+    private static bool ShouldApplyI2VUpscale(WorkflowGenerator g)
     {
-        List<WorkflowGenerator.WorkflowGenStep> steps = WorkflowGenerator.Steps;
-        int index = steps.FindLastIndex(step => Math.Abs(step.Priority - priority) < 0.0001);
-        if (index < 0)
+        return TryGetLtxv2I2vUpscaleSettings(g, out _, out _, out _, out _);
+    }
+
+    private static bool ShouldSkipRefinerForLtxv2I2V(WorkflowGenerator g)
+    {
+        return TryGetLtxv2I2vUpscaleSettings(g, out _, out _, out _, out _);
+    }
+
+    private static bool TryGetLtxv2I2vUpscaleSettings(WorkflowGenerator g, out T2IModel videoModel, out double refineUpscale, out string upscaleMethod, out double refinerControl)
+    {
+        videoModel = null;
+        refineUpscale = 1;
+        upscaleMethod = null;
+        refinerControl = 0;
+
+        if (!g.UserInput.TryGet(T2IParamTypes.VideoModel, out videoModel))
+            return false;
+
+        if (videoModel.ModelClass?.CompatClass?.ID != T2IModelClassSorter.CompatLtxv2.ID)
+            return false;
+
+        // Only apply to Image-to-Video
+        if (!g.UserInput.TryGet(T2IParamTypes.InitImage, out _))
+            return false;
+
+        if (!g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out refineUpscale) || refineUpscale == 1)
+            return false;
+
+        upscaleMethod = g.UserInput.Get(ComfyUIBackendExtension.RefinerUpscaleMethod, "None");
+        if (!upscaleMethod.StartsWith("latentmodel-"))
+            return false;
+
+        if (!g.UserInput.TryGet(T2IParamTypes.RefinerControl, out refinerControl) || refinerControl <= 0)
+            return false;
+
+        return true;
+    }
+
+    private static void TryApplyLtxv2I2VUpscale(WorkflowGenerator g, JArray originalInputImage = null, JArray priorLatent = null)
+    {
+        if (!TryGetLtxv2I2vUpscaleSettings(g, out T2IModel videoModel, out double refineUpscale, out string upscaleMethod, out double refinerControl))
         {
-            Logs.Warning($"Ltxv2LatentUpscaleExtension could not find workflow step priority {priority} to replace.");
+            Logs.Warning("LTXV2 I2V latent upscale was requested but conditions were not met.");
             return;
         }
-        steps[index] = new WorkflowGenerator.WorkflowGenStep(newAction, priority);
-        WorkflowGenerator.Steps = [.. steps.OrderBy(step => step.Priority)];
-    }
 
-    private static JArray DoMaskShrinkApply(WorkflowGenerator g, JArray imgIn)
-    {
-        (string boundsNode, string croppedMask, string masked, string scaledImage) = g.MaskShrunkInfo;
-        g.MaskShrunkInfo = new(null, null, null, null);
-        if (boundsNode is not null)
-        {
-            imgIn = g.RecompositeCropped(boundsNode, [croppedMask, 0], g.FinalInputImage, imgIn);
-        }
-        else if (g.UserInput.Get(T2IParamTypes.InitImageRecompositeMask, true) && g.FinalMask is not null && !g.NodeHelpers.ContainsKey("recomposite_mask_result"))
-        {
-            imgIn = g.CompositeMask(g.FinalInputImage, imgIn, g.FinalMask);
-        }
-        g.NodeHelpers["recomposite_mask_result"] = $"{imgIn[0]}";
-        return imgIn;
-    }
+        Logs.Info($"Applying LTXV2 I2V latent upscale: {upscaleMethod}, scale={refineUpscale}x, control={refinerControl}");
 
-    private static void ApplyVideoTrim(WorkflowGenerator g)
-    {
+        JArray imageToScale = originalInputImage ?? g.FinalImageOut;
+        if (imageToScale is null)
+        {
+            Logs.Error("No input image found for LTXV2 I2V upscale.");
+            return;
+        }
+
+        int? frames = g.UserInput.TryGet(T2IParamTypes.VideoFrames, out int framesRaw) ? framesRaw : null;
+        int? videoFps = g.UserInput.TryGet(T2IParamTypes.VideoFPS, out int fpsRaw) ? fpsRaw : null;
+        double? videoCfg = g.UserInput.GetNullable(T2IParamTypes.CFGScale, T2IParamInput.SectionID_Video, false)
+            ?? g.UserInput.GetNullable(T2IParamTypes.VideoCFG, T2IParamInput.SectionID_Video);
+        int videoSteps = g.UserInput.GetNullable(T2IParamTypes.Steps, T2IParamInput.SectionID_Video, false)
+            ?? g.UserInput.Get(T2IParamTypes.VideoSteps, 20, sectionId: T2IParamInput.SectionID_Video);
+        string format = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4").ToLowerFast();
+        string resFormat = g.UserInput.Get(T2IParamTypes.VideoResolution, "Model Preferred");
+        long seed = g.UserInput.Get(T2IParamTypes.Seed) + 42;
+        string prompt = g.UserInput.Get(T2IParamTypes.Prompt, "");
+        string negPrompt = g.UserInput.Get(T2IParamTypes.NegativePrompt, "");
+
+        int width = videoModel.StandardWidth <= 0 ? 1024 : videoModel.StandardWidth;
+        int height = videoModel.StandardHeight <= 0 ? 576 : videoModel.StandardHeight;
+        int imageWidth = g.UserInput.GetImageWidth();
+        int imageHeight = g.UserInput.GetImageHeight();
+        int resPrecision = 64;
+        if (videoModel.ModelClass?.CompatClass?.ID == "hunyuan-video")
+        {
+            resPrecision = 16;
+        }
+        if (resFormat == "Image Aspect, Model Res")
+        {
+            if (width == 1024 && height == 576 && imageWidth == 1344 && imageHeight == 768)
+            {
+                width = 1024;
+                height = 576;
+            }
+            else
+            {
+                (width, height) = Utilities.ResToModelFit(imageWidth, imageHeight, width * height, resPrecision);
+            }
+        }
+        else if (resFormat == "Image")
+        {
+            width = imageWidth;
+            height = imageHeight;
+            width = (int)Math.Round(width * refineUpscale);
+            height = (int)Math.Round(height * refineUpscale);
+        }
+
+        int targetWidth = width;
+        int targetHeight = height;
+        int baseWidth = (int)Math.Round(targetWidth / refineUpscale);
+        int baseHeight = (int)Math.Round(targetHeight / refineUpscale);
+        if (baseWidth <= 0 || baseHeight <= 0)
+        {
+            Logs.Warning($"Invalid base resolution computed ({baseWidth}x{baseHeight}), falling back to target resolution.");
+            baseWidth = Math.Max(16, targetWidth);
+            baseHeight = Math.Max(16, targetHeight);
+        }
+
+        g.IsImageToVideo = true;
+        WorkflowGenerator.ImageToVideoGenInfo genInfo = new()
+        {
+            Generator = g,
+            VideoModel = videoModel,
+            VideoSwapModel = g.UserInput.Get(T2IParamTypes.VideoSwapModel, null),
+            VideoSwapPercent = g.UserInput.Get(T2IParamTypes.VideoSwapPercent, 0.5),
+            Frames = frames,
+            VideoCFG = videoCfg,
+            VideoFPS = videoFps,
+            Width = baseWidth,
+            Height = baseHeight,
+            Prompt = prompt,
+            NegativePrompt = negPrompt,
+            Steps = videoSteps,
+            Seed = seed,
+            ContextID = T2IParamInput.SectionID_Video,
+            VideoEndFrame = g.UserInput.Get(T2IParamTypes.VideoEndFrame, null)
+        };
+
+        string scaledImage = g.CreateNode("ImageScale", new JObject()
+        {
+            ["image"] = imageToScale,
+            ["width"] = targetWidth,
+            ["height"] = targetHeight,
+            ["upscale_method"] = "lanczos",
+            ["crop"] = "disabled"
+        });
+        JArray scaledImageOut = [scaledImage, 0];
+        g.FinalImageOut = scaledImageOut;
+
+        genInfo.PrepModelAndCond(g);
+        genInfo.PrepFullCond(g);
+        genInfo.VideoCFG ??= genInfo.DefaultCFG;
+
+        string previewType = g.UserInput.Get(ComfyUIBackendExtension.VideoPreviewType, "animate");
+        string explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: genInfo.ContextID, includeBase: false);
+        string explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: genInfo.ContextID, includeBase: false);
+
+        string baseSampler = g.CreateKSampler(genInfo.Model, genInfo.PosCond, genInfo.NegCond, genInfo.Latent,
+            genInfo.VideoCFG.Value, genInfo.Steps, genInfo.StartStep, 10000, genInfo.Seed, false, true,
+            sigmin: 0.002, sigmax: 1000, previews: previewType,
+            defsampler: genInfo.DefaultSampler, defscheduler: genInfo.DefaultScheduler,
+            hadSpecialCond: genInfo.HadSpecialCond, explicitSampler: explicitSampler, explicitScheduler: explicitScheduler,
+            sectionId: genInfo.ContextID);
+
+        string separated = g.CreateNode("LTXVSeparateAVLatent", new JObject()
+        {
+            ["av_latent"] = WorkflowGenerator.NodePath(baseSampler, 0)
+        });
+        JArray baseVideoLatent = [separated, 0];
+        JArray baseAudioLatent = [separated, 1];
+
+        string cropGuides = g.CreateNode("LTXVCropGuides", new JObject()
+        {
+            ["positive"] = genInfo.PosCond,
+            ["negative"] = genInfo.NegCond,
+            ["latent"] = baseVideoLatent
+        });
+        JArray cropPosCond = [cropGuides, 0];
+        JArray cropNegCond = [cropGuides, 1];
+        JArray cropLatent = [cropGuides, 2];
+
+        string latentModelLoader = g.CreateNode("LatentUpscaleModelLoader", new JObject()
+        {
+            ["model_name"] = upscaleMethod.After("latentmodel-")
+        });
+        string latentUpsampler = g.CreateNode("LTXVLatentUpsampler", new JObject()
+        {
+            ["vae"] = genInfo.Vae,
+            ["samples"] = cropLatent,
+            ["upscale_model"] = WorkflowGenerator.NodePath(latentModelLoader, 0)
+        });
+
+        string preproc = g.CreateNode("LTXVPreprocess", new JObject()
+        {
+            ["image"] = scaledImageOut,
+            ["img_compression"] = 32
+        });
+
+        string upscaledImgToVideo = g.CreateNode("LTXVImgToVideoInplace", new JObject()
+        {
+            ["vae"] = genInfo.Vae,
+            ["image"] = WorkflowGenerator.NodePath(preproc, 0),
+            ["latent"] = WorkflowGenerator.NodePath(latentUpsampler, 0),
+            ["strength"] = 1.0,
+            ["bypass"] = false
+        });
+
+        string reconcat = g.CreateNode("LTXVConcatAVLatent", new JObject()
+        {
+            ["video_latent"] = WorkflowGenerator.NodePath(upscaledImgToVideo, 0),
+            ["audio_latent"] = baseAudioLatent
+        });
+
+        JArray refineModel = genInfo.Model;
+        if (g.UserInput.TryGet(ComfyUIBackendExtension.RefinerHyperTile, out int tileSize))
+        {
+            string hyperTileNode = g.CreateNode("HyperTile", new JObject()
+            {
+                ["model"] = refineModel,
+                ["tile_size"] = tileSize,
+                ["swap_size"] = 2,
+                ["max_depth"] = 0,
+                ["scale_depth"] = false
+            });
+            refineModel = [hyperTileNode, 0];
+        }
+
+        int upscaleSteps = g.UserInput.Get(T2IParamTypes.RefinerSteps, genInfo.Steps, sectionId: T2IParamInput.SectionID_Refiner);
+        double upscaleCfg = g.UserInput.Get(T2IParamTypes.RefinerCFGScale, genInfo.VideoCFG.Value, sectionId: T2IParamInput.SectionID_Refiner);
+        int upscaleStartStep = (int)Math.Round(upscaleSteps * (1 - refinerControl));
+        if (upscaleStartStep < 0)
+        {
+            upscaleStartStep = 0;
+        }
+        else if (upscaleStartStep > upscaleSteps)
+        {
+            upscaleStartStep = upscaleSteps;
+        }
+
+        string refinerMethod = g.UserInput.Get(T2IParamTypes.RefinerMethod, "PostApply");
+        bool addNoise = refinerMethod != "StepSwapNoisy";
+        bool doTiled = g.UserInput.Get(T2IParamTypes.RefinerDoTiling, false);
+
+        string explicitSamplerRef = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false)
+            ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSamplerParam, null);
+        string explicitSchedulerRef = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false)
+            ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSchedulerParam, null);
+
+        string upscaleSampler = g.CreateKSampler(refineModel, cropPosCond, cropNegCond, [reconcat, 0],
+            upscaleCfg, upscaleSteps, upscaleStartStep, 10000, genInfo.Seed + 1, false, addNoise,
+            sigmin: 0.002, sigmax: 1000, previews: previewType, doTiled: doTiled,
+            hadSpecialCond: true, explicitSampler: explicitSamplerRef, explicitScheduler: explicitSchedulerRef,
+            sectionId: T2IParamInput.SectionID_Refiner);
+
+        g.FinalLatentImage = [upscaleSampler, 0];
+        string decoded = g.CreateVAEDecode(genInfo.Vae, g.FinalLatentImage);
+        g.FinalImageOut = [decoded, 0];
+
+        int outputFps = genInfo.VideoFPS ?? 24;
         if (g.UserInput.TryGet(T2IParamTypes.TrimVideoStartFrames, out _) || g.UserInput.TryGet(T2IParamTypes.TrimVideoEndFrames, out _))
         {
             string trimNode = g.CreateNode("SwarmTrimFrames", new JObject()
@@ -93,536 +358,50 @@ public class Ltxv2LatentUpscaleExtension : Extension
             });
             g.FinalImageOut = [trimNode, 0];
         }
-    }
 
-    private static bool TryApplyLtxv2VideoUpscale(WorkflowGenerator g, WorkflowGenerator.ImageToVideoGenInfo genInfo, string explicitSampler, string explicitScheduler)
-    {
-        string upscaleMethod = g.UserInput.Get(ComfyUIBackendExtension.RefinerUpscaleMethod, "None");
-        double refinerControl = g.UserInput.Get(T2IParamTypes.RefinerControl, 0.5);
-        if (!g.IsLTXV2())
+        bool hasExtend = prompt.Contains("<extend:");
+        if (!hasExtend && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string vfiMethod)
+            && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1)
         {
-            return false;
+            if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
+            {
+                g.CreateAnimationSaveNode(g.FinalImageOut, outputFps, format, g.GetStableDynamicID(50000, 0));
+            }
+            g.FinalImageOut = g.DoInterpolation(g.FinalImageOut, vfiMethod, mult);
+            outputFps *= mult;
         }
-        if (!g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double refineUpscale) || refineUpscale == 1)
+        if (g.UserInput.Get(T2IParamTypes.VideoBoomerang, false))
         {
-            return false;
-        }
-        if (!upscaleMethod.StartsWith("latentmodel-") || refinerControl <= 0)
-        {
-            return false;
-        }
-
-        int upscaleSteps = g.UserInput.Get(T2IParamTypes.RefinerSteps, genInfo.Steps);
-        double upscaleCfg = g.UserInput.Get(T2IParamTypes.RefinerCFGScale, genInfo.VideoCFG ?? 3);
-        int startStep = (int)Math.Round(upscaleSteps * (1 - refinerControl));
-        string upscaleModelLoader = g.CreateNode("LatentUpscaleModelLoader", new JObject()
-        {
-            ["model_name"] = upscaleMethod.After("latentmodel-")
-        });
-        string separated = g.CreateNode("LTXVSeparateAVLatent", new JObject()
-        {
-            ["av_latent"] = g.FinalLatentImage
-        });
-        JArray videoLatent = [separated, 0];
-        JArray audioLatent = [separated, 1];
-        g.FinalLatentAudio = audioLatent;
-        string cropGuides = g.CreateNode("LTXVCropGuides", new JObject()
-        {
-            ["positive"] = genInfo.PosCond,
-            ["negative"] = genInfo.NegCond,
-            ["latent"] = videoLatent
-        });
-        JArray croppedPos = [cropGuides, 0];
-        JArray croppedNeg = [cropGuides, 1];
-        JArray croppedLatent = [cropGuides, 2];
-        string upscaled = g.CreateNode("LTXVLatentUpsampler", new JObject()
-        {
-            ["vae"] = genInfo.Vae,
-            ["samples"] = croppedLatent,
-            ["upscale_model"] = WorkflowGenerator.NodePath(upscaleModelLoader, 0)
-        });
-        JArray upscaledLatent = [upscaled, 0];
-        string ltxvCond = g.CreateNode("LTXVConditioning", new JObject()
-        {
-            ["positive"] = croppedPos,
-            ["negative"] = croppedNeg,
-            ["frame_rate"] = genInfo.VideoFPS ?? 24
-        });
-        JArray upscalePosCond = [ltxvCond, 0];
-        JArray upscaleNegCond = [ltxvCond, 1];
-        string reconcat = g.CreateNode("LTXVConcatAVLatent", new JObject()
-        {
-            ["video_latent"] = upscaledLatent,
-            ["audio_latent"] = audioLatent
-        });
-        JArray recombinedLatent = [reconcat, 0];
-        string upscaleExplicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false)
-            ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSamplerParam, null)
-            ?? explicitSampler;
-        string upscaleExplicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false)
-            ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSchedulerParam, null)
-            ?? explicitScheduler;
-        string previewType = g.UserInput.Get(ComfyUIBackendExtension.VideoPreviewType, "animate");
-        string upscaleSampler = g.CreateKSampler(genInfo.Model, upscalePosCond, upscaleNegCond, recombinedLatent, upscaleCfg, upscaleSteps, startStep, 10000,
-            genInfo.Seed + 2, false, true, sigmin: 0.002, sigmax: 1000, previews: previewType, defsampler: genInfo.DefaultSampler, defscheduler: genInfo.DefaultScheduler,
-            hadSpecialCond: true, explicitSampler: upscaleExplicitSampler, explicitScheduler: upscaleExplicitScheduler, sectionId: T2IParamInput.SectionID_Refiner);
-        g.FinalLatentImage = [upscaleSampler, 0];
-
-        string decoded = g.CreateVAEDecode(genInfo.Vae, g.FinalLatentImage);
-        g.FinalImageOut = [decoded, 0];
-        ApplyVideoTrim(g);
-        return true;
-    }
-
-    private static void PatchedRefinerStep(WorkflowGenerator g)
-    {
-        if (g.UserInput.TryGet(T2IParamTypes.RefinerMethod, out string method)
-            && g.UserInput.TryGet(T2IParamTypes.RefinerControl, out double refinerControl))
-        {
-            if (g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel videoModel)
-                && videoModel.ModelClass?.CompatClass?.ID == T2IModelClassSorter.CompatLtxv2.ID
-                && g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out _))
+            string bounced = g.CreateNode("SwarmVideoBoomerang", new JObject()
             {
-                return;
-            }
-            g.IsRefinerStage = true;
-            JArray origVae = g.FinalVae, prompt = g.FinalPrompt, negPrompt = g.FinalNegativePrompt;
-            bool modelMustReencode = false;
-            T2IModel baseModel = g.UserInput.Get(T2IParamTypes.Model);
-            T2IModel refineModel = baseModel;
-            string loaderNodeId = null;
-            if (g.UserInput.TryGet(T2IParamTypes.RefinerModel, out T2IModel altRefineModel) && altRefineModel is not null)
-            {
-                refineModel = altRefineModel;
-                modelMustReencode = true;
-                if (refineModel.ModelClass?.CompatClass == baseModel.ModelClass?.CompatClass)
-                {
-                    modelMustReencode = false;
-                }
-                if (refineModel.ModelClass?.CompatClass?.ID == "stable-diffusion-xl-v1-refiner" && baseModel.ModelClass?.CompatClass?.ID == "stable-diffusion-xl-v1")
-                {
-                    modelMustReencode = false;
-                }
-                loaderNodeId = "20";
-            }
-            if (g.UserInput.TryGet(T2IParamTypes.RefinerVAE, out _))
-            {
-                modelMustReencode = true;
-            }
-            g.NoVAEOverride = refineModel.ModelClass?.CompatClass != baseModel.ModelClass?.CompatClass;
-            g.FinalLoadedModel = refineModel;
-            g.FinalLoadedModelList = [refineModel];
-            (g.FinalLoadedModel, g.FinalModel, g.FinalClip, g.FinalVae) = g.CreateStandardModelLoader(refineModel, "Refiner", loaderNodeId, sectionId: T2IParamInput.SectionID_Refiner);
-            g.NoVAEOverride = false;
-            prompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.Prompt), g.FinalClip, g.FinalLoadedModel, true, isRefiner: true);
-            negPrompt = g.CreateConditioning(g.UserInput.Get(T2IParamTypes.NegativePrompt), g.FinalClip, g.FinalLoadedModel, false, isRefiner: true);
-            bool doSave = g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false);
-            bool doUspcale = g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double refineUpscale) && refineUpscale != 1;
-            string upscaleMethod = g.UserInput.Get(ComfyUIBackendExtension.RefinerUpscaleMethod, "None");
-            bool doPixelUpscale = doUspcale && (upscaleMethod.StartsWith("pixel-") || upscaleMethod.StartsWith("model-"));
-            int width = (int)Math.Round(g.UserInput.GetImageWidth() * refineUpscale);
-            int height = (int)Math.Round(g.UserInput.GetImageHeight() * refineUpscale);
-            width = (width / 16) * 16;
-            height = (height / 16) * 16;
-            if (modelMustReencode || doPixelUpscale || doSave || g.MaskShrunkInfo.BoundsNode is not null)
-            {
-                g.CreateVAEDecode(origVae, g.FinalSamples, "24");
-                JArray pixelsNode = ["24", 0];
-                pixelsNode = DoMaskShrinkApply(g, pixelsNode);
-                if (doSave)
-                {
-                    g.CreateImageSaveNode(pixelsNode, "29");
-                }
-                if (doPixelUpscale)
-                {
-                    if (upscaleMethod.StartsWith("pixel-"))
-                    {
-                        g.CreateNode("ImageScale", new JObject()
-                        {
-                            ["image"] = pixelsNode,
-                            ["width"] = width,
-                            ["height"] = height,
-                            ["upscale_method"] = upscaleMethod.After("pixel-"),
-                            ["crop"] = "disabled"
-                        }, "26");
-                    }
-                    else
-                    {
-                        g.CreateNode("UpscaleModelLoader", new JObject()
-                        {
-                            ["model_name"] = upscaleMethod.After("model-")
-                        }, "27");
-                        g.CreateNode("ImageUpscaleWithModel", new JObject()
-                        {
-                            ["upscale_model"] = WorkflowGenerator.NodePath("27", 0),
-                            ["image"] = pixelsNode
-                        }, "28");
-                        g.CreateNode("ImageScale", new JObject()
-                        {
-                            ["image"] = WorkflowGenerator.NodePath("28", 0),
-                            ["width"] = width,
-                            ["height"] = height,
-                            ["upscale_method"] = "lanczos",
-                            ["crop"] = "disabled"
-                        }, "26");
-                    }
-                    pixelsNode = ["26", 0];
-                    if (refinerControl <= 0)
-                    {
-                        g.FinalImageOut = pixelsNode;
-                        return;
-                    }
-                }
-                if (modelMustReencode || doPixelUpscale)
-                {
-                    g.CreateVAEEncode(g.FinalVae, pixelsNode, "25");
-                    g.FinalSamples = ["25", 0];
-                }
-            }
-            if (doUspcale && upscaleMethod.StartsWith("latent-"))
-            {
-                g.CreateNode("LatentUpscaleBy", new JObject()
-                {
-                    ["samples"] = g.FinalSamples,
-                    ["upscale_method"] = upscaleMethod.After("latent-"),
-                    ["scale_by"] = refineUpscale
-                }, "26");
-                g.FinalSamples = ["26", 0];
-            }
-            else if (doUspcale && upscaleMethod.StartsWith("latentmodel-"))
-            {
-                g.CreateNode("LatentUpscaleModelLoader", new JObject()
-                {
-                    ["model_name"] = upscaleMethod.After("latentmodel-")
-                }, "27");
-                if (g.IsHunyuanVideo15())
-                {
-                    g.CreateNode("HunyuanVideo15LatentUpscaleWithModel", new JObject()
-                    {
-                        ["model"] = WorkflowGenerator.NodePath("27", 0),
-                        ["samples"] = g.FinalSamples,
-                        ["upscale_method"] = "bilinear",
-                        ["width"] = width,
-                        ["height"] = height,
-                        ["crop"] = "disabled"
-                    }, "26");
-                    g.FinalSamples = ["26", 0];
-                }
-                else if (g.IsLTXV2())
-                {
-                    string separated = g.CreateNode("LTXVSeparateAVLatent", new JObject()
-                    {
-                        ["av_latent"] = g.FinalSamples
-                    });
-                    g.FinalLatentAudio = [separated, 1];
-                    string cropGuides = g.CreateNode("LTXVCropGuides", new JObject()
-                    {
-                        ["positive"] = prompt,
-                        ["negative"] = negPrompt,
-                        ["latent"] = WorkflowGenerator.NodePath(separated, 0)
-                    });
-                    prompt = [cropGuides, 0];
-                    negPrompt = [cropGuides, 1];
-                    g.CreateNode("LTXVLatentUpsampler", new JObject()
-                    {
-                        ["vae"] = g.FinalVae,
-                        ["samples"] = WorkflowGenerator.NodePath(cropGuides, 2),
-                        ["upscale_model"] = WorkflowGenerator.NodePath("27", 0)
-                    }, "26");
-                    string ltxvCond = g.CreateNode("LTXVConditioning", new JObject()
-                    {
-                        ["positive"] = prompt,
-                        ["negative"] = negPrompt,
-                        ["frame_rate"] = g.UserInput.Get(T2IParamTypes.Text2VideoFPS, 24)
-                    });
-                    prompt = [ltxvCond, 0];
-                    negPrompt = [ltxvCond, 1];
-                    string reconcat = g.CreateNode("LTXVConcatAVLatent", new JObject()
-                    {
-                        ["video_latent"] = WorkflowGenerator.NodePath("26", 0),
-                        ["audio_latent"] = g.FinalLatentAudio
-                    });
-                    g.FinalSamples = [reconcat, 0];
-                }
-                else
-                {
-                    throw new SwarmUserErrorException($"Cannot latent-upscale for {g.CurrentCompatClass()}");
-                }
-            }
-            JArray model = g.FinalModel;
-            if (g.UserInput.TryGet(ComfyUIBackendExtension.RefinerHyperTile, out int tileSize))
-            {
-                string hyperTileNode = g.CreateNode("HyperTile", new JObject()
-                {
-                    ["model"] = model,
-                    ["tile_size"] = tileSize,
-                    ["swap_size"] = 2,
-                    ["max_depth"] = 0,
-                    ["scale_depth"] = false
-                });
-                model = [hyperTileNode, 0];
-            }
-            int steps = g.UserInput.Get(T2IParamTypes.RefinerSteps, g.UserInput.Get(T2IParamTypes.Steps, 20, sectionId: T2IParamInput.SectionID_Refiner), sectionId: T2IParamInput.SectionID_Refiner);
-            double cfg = g.UserInput.Get(T2IParamTypes.RefinerCFGScale, g.UserInput.Get(T2IParamTypes.CFGScale, 7, sectionId: T2IParamInput.SectionID_Refiner), sectionId: T2IParamInput.SectionID_Refiner);
-            string explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false) ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSamplerParam, null);
-            string explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: T2IParamInput.SectionID_Refiner, includeBase: false) ?? g.UserInput.Get(ComfyUIBackendExtension.RefinerSchedulerParam, null);
-            g.CreateKSampler(model, prompt, negPrompt, g.FinalSamples, cfg, steps, (int)Math.Round(steps * (1 - refinerControl)), 10000,
-                g.UserInput.Get(T2IParamTypes.Seed) + 1, false, method != "StepSwapNoisy", id: "23", doTiled: g.UserInput.Get(T2IParamTypes.RefinerDoTiling, false),
-                explicitSampler: explicitSampler, explicitScheduler: explicitScheduler, sectionId: T2IParamInput.SectionID_Refiner);
-            g.FinalSamples = ["23", 0];
-            g.IsRefinerStage = false;
-        }
-    }
-
-    private static void PatchedImageToVideoStep(WorkflowGenerator g)
-    {
-        if (g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel vidModel))
-        {
-            int? frames = g.UserInput.TryGet(T2IParamTypes.VideoFrames, out int framesRaw) ? framesRaw : null;
-            int? videoFps = g.UserInput.TryGet(T2IParamTypes.VideoFPS, out int fpsRaw) ? fpsRaw : null;
-            double? videoCfg = g.UserInput.GetNullable(T2IParamTypes.CFGScale, T2IParamInput.SectionID_Video, false) ?? g.UserInput.GetNullable(T2IParamTypes.VideoCFG, T2IParamInput.SectionID_Video);
-            int steps = g.UserInput.GetNullable(T2IParamTypes.Steps, T2IParamInput.SectionID_Video, false) ?? g.UserInput.Get(T2IParamTypes.VideoSteps, 20, sectionId: T2IParamInput.SectionID_Video);
-            string format = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4").ToLowerFast();
-            string resFormat = g.UserInput.Get(T2IParamTypes.VideoResolution, "Model Preferred");
-            long seed = g.UserInput.Get(T2IParamTypes.Seed) + 42;
-            string prompt = g.UserInput.Get(T2IParamTypes.Prompt, "");
-            string negPrompt = g.UserInput.Get(T2IParamTypes.NegativePrompt, "");
-            int batchInd = -1, batchLen = -1;
-            if (g.UserInput.TryGet(T2IParamTypes.Video2VideoCreativity, out _))
-            {
-                batchInd = 0;
-                batchLen = 1;
-            }
-            int width = vidModel.StandardWidth <= 0 ? 1024 : vidModel.StandardWidth;
-            int height = vidModel.StandardHeight <= 0 ? 576 : vidModel.StandardHeight;
-            int imageWidth = g.UserInput.GetImageWidth();
-            int imageHeight = g.UserInput.GetImageHeight();
-            int resPrecision = 64;
-            bool hasLatentUpscaler = false;
-            if (vidModel.ModelClass?.CompatClass?.ID == "hunyuan-video")
-            {
-                resPrecision = 16;
-            }
-            else if (vidModel.ModelClass?.CompatClass?.ID == T2IModelClassSorter.CompatLtxv2.ID)
-            {
-                hasLatentUpscaler = true;
-            }
-            if (resFormat == "Image Aspect, Model Res")
-            {
-                if (width == 1024 && height == 576 && imageWidth == 1344 && imageHeight == 768)
-                {
-                    width = 1024;
-                    height = 576;
-                }
-                else
-                {
-                    (width, height) = Utilities.ResToModelFit(imageWidth, imageHeight, width * height, resPrecision);
-                }
-            }
-            else if (resFormat == "Image")
-            {
-                width = imageWidth;
-                height = imageHeight;
-                if (g.UserInput.TryGet(T2IParamTypes.RefinerUpscale, out double scale) && !hasLatentUpscaler)
-                {
-                    width = (int)Math.Round(width * scale);
-                    height = (int)Math.Round(height * scale);
-                }
-            }
-            void altLatent(WorkflowGenerator.ImageToVideoGenInfo genInfo)
-            {
-                if (g.UserInput.TryGet(T2IParamTypes.Video2VideoCreativity, out double v2vCreativity))
-                {
-                    string fromBatch = g.CreateNode("ImageFromBatch", new JObject()
-                    {
-                        ["image"] = g.FinalImageOut,
-                        ["batch_index"] = 0,
-                        ["length"] = genInfo.Frames.Value
-                    });
-                    genInfo.StartStep = (int)Math.Floor(steps * (1 - v2vCreativity));
-                    string reEncode = g.CreateNode("VAEEncode", new JObject()
-                    {
-                        ["vae"] = genInfo.Vae,
-                        ["pixels"] = WorkflowGenerator.NodePath(fromBatch, 0)
-                    });
-                    genInfo.Latent = [reEncode, 0];
-                }
-            }
-            WorkflowGenerator.ImageToVideoGenInfo genInfo = new()
-            {
-                Generator = g,
-                VideoModel = vidModel,
-                VideoSwapModel = g.UserInput.Get(T2IParamTypes.VideoSwapModel, null),
-                VideoSwapPercent = g.UserInput.Get(T2IParamTypes.VideoSwapPercent, 0.5),
-                Frames = frames,
-                VideoCFG = videoCfg,
-                VideoFPS = videoFps,
-                Width = width,
-                Height = height,
-                Prompt = prompt,
-                NegativePrompt = negPrompt,
-                Steps = steps,
-                Seed = seed,
-                AltLatent = altLatent,
-                BatchIndex = batchInd,
-                BatchLen = batchLen,
-                ContextID = T2IParamInput.SectionID_Video,
-                VideoEndFrame = g.UserInput.Get(T2IParamTypes.VideoEndFrame, null)
-            };
-
-            string explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: genInfo.ContextID, includeBase: false);
-            string explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: genInfo.ContextID, includeBase: false);
-            if (genInfo.VideoSwapModel is not null)
-            {
-                explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: T2IParamInput.SectionID_VideoSwap, includeBase: false) ?? explicitSampler;
-                explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: T2IParamInput.SectionID_VideoSwap, includeBase: false) ?? explicitScheduler;
-            }
-
-            g.CreateImageToVideo(genInfo);
-            videoFps = genInfo.VideoFPS;
-            TryApplyLtxv2VideoUpscale(g, genInfo, explicitSampler, explicitScheduler);
-            bool hasExtend = prompt.Contains("<extend:");
-            if (!hasExtend && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string method) && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1)
-            {
-                if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
-                {
-                    g.CreateAnimationSaveNode(g.FinalImageOut, videoFps.Value, format, g.GetStableDynamicID(50000, 0));
-                }
-                g.FinalImageOut = g.DoInterpolation(g.FinalImageOut, method, mult);
-                videoFps *= mult;
-            }
-            if (g.UserInput.Get(T2IParamTypes.VideoBoomerang, false))
-            {
-                string bounced = g.CreateNode("SwarmVideoBoomerang", new JObject()
-                {
-                    ["images"] = g.FinalImageOut
-                });
-                g.FinalImageOut = [bounced, 0];
-            }
-            string nodeId = "9";
-            if (hasExtend)
-            {
-                nodeId = $"{g.GetStableDynamicID(50000, 0)}";
-            }
-            g.CreateAnimationSaveNode(g.FinalImageOut, videoFps.Value, format, nodeId);
-        }
-    }
-
-    private static void PatchedExtendVideoStep(WorkflowGenerator g)
-    {
-        string fullRawPrompt = g.UserInput.Get(T2IParamTypes.Prompt, "");
-        if (fullRawPrompt.Contains("<extend:"))
-        {
-            string negPrompt = g.UserInput.Get(T2IParamTypes.NegativePrompt, "");
-            long seed = g.UserInput.Get(T2IParamTypes.Seed) + 600;
-            int? videoFps = g.UserInput.TryGet(T2IParamTypes.VideoFPS, out int fpsRaw) ? fpsRaw : null;
-            string format = g.UserInput.Get(T2IParamTypes.VideoExtendFormat, "mp4").ToLowerFast();
-            int frameExtendOverlap = g.UserInput.Get(T2IParamTypes.VideoExtendFrameOverlap, 9);
-            bool saveIntermediate = g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false);
-            T2IModel extendModel = g.UserInput.Get(T2IParamTypes.VideoExtendModel, null) ?? throw new SwarmUserErrorException("You have an '<extend:' block in your prompt, but you don't have a 'Video Extend Model' selected.");
-            PromptRegion regionalizer = new(fullRawPrompt);
-            List<JArray> vidChunks = [g.FinalImageOut];
-            JArray conjoinedLast = g.FinalImageOut;
-            string getWidthNode = g.CreateNode("SwarmImageWidth", new JObject()
-            {
-                ["image"] = g.FinalImageOut
+                ["images"] = g.FinalImageOut
             });
-            JArray width = [getWidthNode, 0];
-            string getHeightNode = g.CreateNode("SwarmImageHeight", new JObject()
-            {
-                ["image"] = g.FinalImageOut
-            });
-            JArray height = [getHeightNode, 0];
-            PromptRegion.Part[] parts = [.. regionalizer.Parts.Where(p => p.Type == PromptRegion.PartType.Extend)];
-            for (int i = 0; i < parts.Length; i++)
-            {
-                PromptRegion.Part part = parts[i];
-                double cfg = g.UserInput.GetNullable(T2IParamTypes.CFGScale, part.ContextID, false) ?? g.UserInput.GetNullable(T2IParamTypes.VideoCFG, part.ContextID) ?? g.UserInput.Get(T2IParamTypes.CFGScale, 7);
-                int steps = g.UserInput.GetNullable(T2IParamTypes.Steps, part.ContextID, false) ?? g.UserInput.GetNullable(T2IParamTypes.VideoSteps, part.ContextID) ?? g.UserInput.Get(T2IParamTypes.Steps, 20);
-                seed++;
-                int? frames = int.Parse(part.DataText);
-                string prompt = part.Prompt;
-                string frameCountNode = g.CreateNode("SwarmCountFrames", new JObject()
-                {
-                    ["image"] = g.FinalImageOut
-                });
-                JArray frameCount = [frameCountNode, 0];
-                string fromEndCountNode = g.CreateNode("SwarmIntAdd", new JObject()
-                {
-                    ["a"] = frameCount,
-                    ["b"] = -frameExtendOverlap
-                });
-                JArray fromEndCount = [fromEndCountNode, 0];
-                string partialBatchNode = g.CreateNode("ImageFromBatch", new JObject()
-                {
-                    ["image"] = g.FinalImageOut,
-                    ["batch_index"] = fromEndCount,
-                    ["length"] = frameExtendOverlap
-                });
-                JArray partialBatch = [partialBatchNode, 0];
-                g.FinalImageOut = partialBatch;
-                WorkflowGenerator.ImageToVideoGenInfo genInfo = new()
-                {
-                    Generator = g,
-                    VideoModel = extendModel,
-                    VideoSwapModel = g.UserInput.Get(T2IParamTypes.VideoExtendSwapModel, null),
-                    VideoSwapPercent = g.UserInput.Get(T2IParamTypes.VideoExtendSwapPercent, 0.5),
-                    Frames = frames,
-                    VideoCFG = cfg,
-                    VideoFPS = videoFps,
-                    Width = width,
-                    Height = height,
-                    Prompt = prompt,
-                    NegativePrompt = negPrompt,
-                    Steps = steps,
-                    Seed = seed,
-                    BatchIndex = 0,
-                    BatchLen = frameExtendOverlap,
-                    ContextID = part.ContextID
-                };
-
-                string explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: genInfo.ContextID, includeBase: false);
-                string explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: genInfo.ContextID, includeBase: false);
-                if (genInfo.VideoSwapModel is not null)
-                {
-                    explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: T2IParamInput.SectionID_VideoSwap, includeBase: false) ?? explicitSampler;
-                    explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: T2IParamInput.SectionID_VideoSwap, includeBase: false) ?? explicitScheduler;
-                }
-
-                g.CreateImageToVideo(genInfo);
-                videoFps = genInfo.VideoFPS;
-                TryApplyLtxv2VideoUpscale(g, genInfo, explicitSampler, explicitScheduler);
-                if (saveIntermediate)
-                {
-                    g.CreateAnimationSaveNode(g.FinalImageOut, videoFps.Value, format, g.GetStableDynamicID(50000, 0));
-                }
-                string cutNode = g.CreateNode("ImageFromBatch", new JObject()
-                {
-                    ["image"] = g.FinalImageOut,
-                    ["batch_index"] = frameExtendOverlap,
-                    ["length"] = frames.Value - frameExtendOverlap
-                });
-                JArray cut = [cutNode, 0];
-                g.FinalImageOut = cut;
-                vidChunks.Add(g.FinalImageOut);
-                string batchedNode = g.CreateNode("ImageBatch", new JObject()
-                {
-                    ["image1"] = conjoinedLast,
-                    ["image2"] = g.FinalImageOut
-                });
-                conjoinedLast = [batchedNode, 0];
-            }
-            g.FinalImageOut = conjoinedLast;
-            if (g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMethod, out string method) && g.UserInput.TryGet(ComfyUIBackendExtension.VideoFrameInterpolationMultiplier, out int mult) && mult > 1)
-            {
-                if (saveIntermediate)
-                {
-                    g.CreateAnimationSaveNode(g.FinalImageOut, videoFps.Value, format, g.GetStableDynamicID(50000, 0));
-                }
-                g.FinalImageOut = g.DoInterpolation(g.FinalImageOut, method, mult);
-                videoFps *= mult;
-            }
-            g.CreateAnimationSaveNode(g.FinalImageOut, videoFps.Value, format, "9");
+            g.FinalImageOut = [bounced, 0];
         }
+        string nodeId = hasExtend ? $"{g.GetStableDynamicID(50000, 0)}" : "9";
+        g.CreateAnimationSaveNode(g.FinalImageOut, outputFps, format, nodeId);
+
+        RemovePreVideoSaveNode(g);
+
+        g.IsImageToVideo = false;
+        Logs.Info("LTXV2 I2V latent upscale completed successfully");
+    }
+
+    private static void RemovePreVideoSaveNode(WorkflowGenerator g)
+    {
+        if (g.Workflow is null || !g.Workflow.TryGetValue("30", out JToken nodeToken))
+        {
+            return;
+        }
+        if (nodeToken is not JObject nodeObj)
+        {
+            return;
+        }
+        if ($"{nodeObj["class_type"]}" != "SwarmSaveAnimationWS")
+        {
+            return;
+        }
+        g.Workflow.Remove("30");
+        Logs.Info("Removed pre-video save node 30 for LTXV2 I2V upscale.");
     }
 }
