@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using FreneticUtilities.FreneticExtensions;
@@ -46,7 +46,11 @@ public class Ltxv2LatentUpscaleExtension : Extension
             steps[i2vIndex] = new WorkflowGenerator.WorkflowGenStep(g =>
             {
                 // Save reference to original image BEFORE I2V encoding modifies it
-                JArray originalInputImage = g.FinalImageOut != null ? new JArray(g.FinalImageOut) : null;
+                JArray originalInputImage = null;
+                if (g.CurrentMedia is not null)
+                {
+                    originalInputImage = new JArray(g.CurrentMedia.AsRawImage(g.CurrentVae).Path);
+                }
 
                 // Check if we should use upscale workflow
                 bool shouldUpscale = ShouldApplyI2VUpscale(g);
@@ -55,7 +59,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
                 {
                     Logs.Info("Using upscale workflow, skipping base I2V workflow");
                     // Don't call originalI2VAction - we'll create complete workflow in upscale
-                    TryApplyLtxv2I2VUpscale(g, originalInputImage, null);
+                    TryApplyLtxv2I2VUpscale(g, originalInputImage);
                 }
                 else
                 {
@@ -138,7 +142,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
         return true;
     }
 
-    private static void TryApplyLtxv2I2VUpscale(WorkflowGenerator g, JArray originalInputImage = null, JArray priorLatent = null)
+    private static void TryApplyLtxv2I2VUpscale(WorkflowGenerator g, JArray originalInputImage = null)
     {
         if (!TryGetLtxv2I2vUpscaleSettings(g, out T2IModel videoModel, out double refineUpscale, out string upscaleMethod, out double refinerControl))
         {
@@ -148,7 +152,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
 
         Logs.Info($"Applying LTXV2 I2V latent upscale: {upscaleMethod}, scale={refineUpscale}x, control={refinerControl}");
 
-        JArray imageToScale = originalInputImage ?? g.FinalImageOut;
+        JArray imageToScale = originalInputImage ?? g.CurrentMedia?.AsRawImage(g.CurrentVae)?.Path;
         if (imageToScale is null)
         {
             Logs.Error("No input image found for LTXV2 I2V upscale.");
@@ -161,7 +165,6 @@ public class Ltxv2LatentUpscaleExtension : Extension
             ?? g.UserInput.GetNullable(T2IParamTypes.VideoCFG, T2IParamInput.SectionID_Video);
         int videoSteps = g.UserInput.GetNullable(T2IParamTypes.Steps, T2IParamInput.SectionID_Video, false)
             ?? g.UserInput.Get(T2IParamTypes.VideoSteps, 20, sectionId: T2IParamInput.SectionID_Video);
-        string format = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4").ToLowerFast();
         string resFormat = g.UserInput.Get(T2IParamTypes.VideoResolution, "Model Preferred");
         long seed = g.UserInput.Get(T2IParamTypes.Seed) + 42;
         string prompt = g.UserInput.Get(T2IParamTypes.Prompt, "");
@@ -236,7 +239,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
             ["crop"] = "disabled"
         });
         JArray scaledImageOut = [scaledImage, 0];
-        g.FinalImageOut = scaledImageOut;
+        g.CurrentMedia = new WGNodeData(scaledImageOut, g, WGNodeData.DT_IMAGE, g.CurrentCompat());
 
         genInfo.PrepModelAndCond(g);
         genInfo.PrepFullCond(g);
@@ -245,8 +248,9 @@ public class Ltxv2LatentUpscaleExtension : Extension
         string previewType = g.UserInput.Get(ComfyUIBackendExtension.VideoPreviewType, "animate");
         string explicitSampler = g.UserInput.Get(ComfyUIBackendExtension.SamplerParam, null, sectionId: genInfo.ContextID, includeBase: false);
         string explicitScheduler = g.UserInput.Get(ComfyUIBackendExtension.SchedulerParam, null, sectionId: genInfo.ContextID, includeBase: false);
+        g.CurrentMedia = g.CurrentMedia.AsSamplingLatent(genInfo.Vae, g.CurrentAudioVae);
 
-        string baseSampler = g.CreateKSampler(genInfo.Model, genInfo.PosCond, genInfo.NegCond, genInfo.Latent,
+        string baseSampler = g.CreateKSampler(genInfo.Model.Path, genInfo.PosCond, genInfo.NegCond, g.CurrentMedia.Path,
             genInfo.VideoCFG.Value, genInfo.Steps, genInfo.StartStep, 10000, genInfo.Seed, false, true,
             sigmin: 0.002, sigmax: 1000, previews: previewType,
             defsampler: genInfo.DefaultSampler, defscheduler: genInfo.DefaultScheduler,
@@ -276,7 +280,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
         });
         string latentUpsampler = g.CreateNode("LTXVLatentUpsampler", new JObject()
         {
-            ["vae"] = genInfo.Vae,
+            ["vae"] = genInfo.Vae.Path,
             ["samples"] = cropLatent,
             ["upscale_model"] = WorkflowGenerator.NodePath(latentModelLoader, 0)
         });
@@ -289,7 +293,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
 
         string upscaledImgToVideo = g.CreateNode("LTXVImgToVideoInplace", new JObject()
         {
-            ["vae"] = genInfo.Vae,
+            ["vae"] = genInfo.Vae.Path,
             ["image"] = WorkflowGenerator.NodePath(preproc, 0),
             ["latent"] = WorkflowGenerator.NodePath(latentUpsampler, 0),
             ["strength"] = 1.0,
@@ -302,7 +306,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
             ["audio_latent"] = baseAudioLatent
         });
 
-        JArray refineModel = genInfo.Model;
+        JArray refineModel = genInfo.Model.Path;
         if (g.UserInput.TryGet(ComfyUIBackendExtension.RefinerHyperTile, out int tileSize))
         {
             string hyperTileNode = g.CreateNode("HyperTile", new JObject()
@@ -343,20 +347,19 @@ public class Ltxv2LatentUpscaleExtension : Extension
             hadSpecialCond: true, explicitSampler: explicitSamplerRef, explicitScheduler: explicitSchedulerRef,
             sectionId: T2IParamInput.SectionID_Refiner);
 
-        g.FinalLatentImage = [upscaleSampler, 0];
-        string decoded = g.CreateVAEDecode(genInfo.Vae, g.FinalLatentImage);
-        g.FinalImageOut = [decoded, 0];
-
+        g.CurrentMedia = new WGNodeData([upscaleSampler, 0], g, WGNodeData.DT_LATENT_AUDIOVIDEO, g.CurrentCompat());
+        g.CurrentMedia = g.CurrentMedia.AsRawImage(genInfo.Vae);
         int outputFps = genInfo.VideoFPS ?? 24;
+        g.CurrentMedia.FPS = outputFps;
         if (g.UserInput.TryGet(T2IParamTypes.TrimVideoStartFrames, out _) || g.UserInput.TryGet(T2IParamTypes.TrimVideoEndFrames, out _))
         {
             string trimNode = g.CreateNode("SwarmTrimFrames", new JObject()
             {
-                ["image"] = g.FinalImageOut,
+                ["image"] = g.CurrentMedia.Path,
                 ["trim_start"] = g.UserInput.Get(T2IParamTypes.TrimVideoStartFrames, 0),
                 ["trim_end"] = g.UserInput.Get(T2IParamTypes.TrimVideoEndFrames, 0)
             });
-            g.FinalImageOut = [trimNode, 0];
+            g.CurrentMedia = g.CurrentMedia.WithPath([trimNode, 0]);
         }
 
         bool hasExtend = prompt.Contains("<extend:");
@@ -365,21 +368,14 @@ public class Ltxv2LatentUpscaleExtension : Extension
         {
             if (g.UserInput.Get(T2IParamTypes.OutputIntermediateImages, false))
             {
-                g.CreateAnimationSaveNode(g.FinalImageOut, outputFps, format, g.GetStableDynamicID(50000, 0));
+                g.CurrentMedia.SaveOutput(genInfo.Vae, g.CurrentAudioVae, g.GetStableDynamicID(50000, 0));
             }
-            g.FinalImageOut = g.DoInterpolation(g.FinalImageOut, vfiMethod, mult);
+            g.CurrentMedia = g.CurrentMedia.WithPath(g.DoInterpolation(g.CurrentMedia.Path, vfiMethod, mult));
             outputFps *= mult;
-        }
-        if (g.UserInput.Get(T2IParamTypes.VideoBoomerang, false))
-        {
-            string bounced = g.CreateNode("SwarmVideoBoomerang", new JObject()
-            {
-                ["images"] = g.FinalImageOut
-            });
-            g.FinalImageOut = [bounced, 0];
+            g.CurrentMedia.FPS = outputFps;
         }
         string nodeId = hasExtend ? $"{g.GetStableDynamicID(50000, 0)}" : "9";
-        g.CreateAnimationSaveNode(g.FinalImageOut, outputFps, format, nodeId);
+        g.CurrentMedia.SaveOutput(genInfo.Vae, g.CurrentAudioVae, nodeId);
 
         RemovePreVideoSaveNode(g);
 
