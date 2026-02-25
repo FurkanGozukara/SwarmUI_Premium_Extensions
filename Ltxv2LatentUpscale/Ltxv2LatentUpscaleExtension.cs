@@ -240,9 +240,10 @@ public class Ltxv2LatentUpscaleExtension : Extension
         });
         JArray scaledImageOut = [scaledImage, 0];
         g.CurrentMedia = new WGNodeData(scaledImageOut, g, WGNodeData.DT_IMAGE, g.CurrentCompat());
+        WGNodeData srcImage = g.CurrentMedia;
 
         genInfo.PrepModelAndCond(g);
-        genInfo.PrepFullCond(g);
+        genInfo.PrepFullCond(g, srcImage);
         genInfo.VideoCFG ??= genInfo.DefaultCFG;
 
         string previewType = g.UserInput.Get(ComfyUIBackendExtension.VideoPreviewType, "animate");
