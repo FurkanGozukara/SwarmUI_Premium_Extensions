@@ -5,6 +5,7 @@ using FreneticUtilities.FreneticExtensions;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Builtin_ComfyUIBackend;
 using SwarmUI.Core;
+using SwarmUI.Media;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 
@@ -14,12 +15,25 @@ public class Ltxv2LatentUpscaleExtension : Extension
 {
     private static bool _patched;
 
+    private static T2IRegisteredParam<bool> FoleyAudioGeneration;
+    private static T2IRegisteredParam<bool> FoleyAutoReencodeInput;
+    private static T2IRegisteredParam<bool> FoleyAutoLongVideo;
+    private static T2IRegisteredParam<int> FoleyMaximumFrames;
+    private static T2IRegisteredParam<int> FoleyWindowFrames;
+    private static T2IRegisteredParam<double> FoleyWindowOverlap;
+    private static T2IRegisteredParam<int> FoleyMaximumWindows;
+    private static T2IRegisteredParam<int> FoleyConditioningSize;
+    private static T2IRegisteredParam<double> FoleyAudioCFG;
+    private static T2IRegisteredParam<double> FoleyVideoCFG;
+    private static T2IRegisteredParam<double> FoleySTGScale;
+    private static T2IRegisteredParam<double> FoleyModalityScale;
+
     public override void OnInit()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds LTXV2 latent upscaler support for Image-to-Video workflows only.";
+        Description = "Adds LTXV2 latent upscaling and native LTX 2.3 Foley video-to-audio generation.";
         License = "MIT";
-        Version = "0.5.1";
+        Version = "0.8.0";
 
         if (_patched)
         {
@@ -28,8 +42,39 @@ public class Ltxv2LatentUpscaleExtension : Extension
         }
         _patched = true;
 
+        RegisterFoleyParameters();
         PatchWorkflowSteps();
-        Logs.Info("LTXV2 I2V Latent Upscale extension initialized - only affects LTXV2 Image-to-Video with latent upscaling.");
+        Logs.Info("LTXV2 extension initialized with latent upscaling and LTX 2.3 Foley V2A support.");
+    }
+
+    private static void RegisterFoleyParameters()
+    {
+        T2IParamGroup group = new("LTX 2.3 Foley Audio", Open: true, OrderPriority: 8,
+            Description: "Generate synchronized Foley sound effects for an input video with the LTX 2.3 Foley V2A LoRA.");
+        FoleyAudioGeneration = T2IParamTypes.Register<bool>(new("LTX 2.3 Foley Audio", "Freezes the input video and generates only its synchronized audio track. Requires an LTX 2.3 base model, an input video, and the Foley V2A LoRA.",
+            "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: group, OrderPriority: -10, ChangeWeight: 8));
+        FoleyAutoReencodeInput = T2IParamTypes.Register<bool>(new("LTX 2.3 Foley Auto Reencode Input", "Streams and resamples the source video to the selected Video FPS before it becomes an image tensor. Leave enabled for correct timing and low RAM use. The Foley preset selects 24 FPS.",
+            "true", IgnoreIf: "true", FeatureFlag: "comfyui", Group: group, OrderPriority: -9, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyAutoLongVideo = T2IParamTypes.Register<bool>(new("LTX 2.3 Foley Auto Long Video", "When enabled, the complete input video is automatically processed as overlapping low-memory windows and the stitched audio is muxed onto the original compressed video. Leave Maximum Frames at its 169 default for automatic full-video length; enter a different value to impose a custom total-frame limit.",
+            "true", IgnoreIf: "true", FeatureFlag: "comfyui", Group: group, OrderPriority: -8.5, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyMaximumFrames = T2IParamTypes.Register<int>(new("LTX 2.3 Foley Maximum Frames", "Maximum input frames to process after FPS conversion. The workflow automatically rounds down to a valid 8n+1 LTX frame count. The recommended default is 169; larger custom values are allowed but can require substantially more RAM and VRAM.",
+            "169", Min: 1, Max: 4097, Step: 8, ViewMax: 673, FeatureFlag: "comfyui", Group: group, OrderPriority: -8, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyWindowFrames = T2IParamTypes.Register<int>(new("LTX 2.3 Foley Window Frames", "Frame count for each automatically stitched long-video window. Must be 8n+1. The community sliding-window workflow recommends 89.",
+            "89", Min: 9, Max: 257, Step: 8, ViewMax: 169, FeatureFlag: "comfyui", Group: group, OrderPriority: -7.9, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyWindowOverlap = T2IParamTypes.Register<double>(new("LTX 2.3 Foley Window Overlap Seconds", "Crossfade overlap between neighboring Foley windows. One second is the community workflow default; reduce it if distinct sounds repeat at boundaries.",
+            "1", Min: 0, Max: 10, Step: 0.1, ViewMax: 3, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -7.8, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyMaximumWindows = T2IParamTypes.Register<int>(new("LTX 2.3 Foley Maximum Windows", "Safety limit for automatic long-video processing. Increase this for videos that require more than 16 windows.",
+            "16", Min: 1, Max: 256, Step: 1, ViewMax: 32, FeatureFlag: "comfyui", Group: group, OrderPriority: -7.7, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyConditioningSize = T2IParamTypes.Register<int>(new("LTX 2.3 Foley Conditioning Size", "Square resolution used only for each Foley analysis window. Final output keeps the original compressed video resolution.",
+            "576", Min: 256, Max: 1024, Step: 32, ViewMax: 768, FeatureFlag: "comfyui", Group: group, OrderPriority: -7.6, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyAudioCFG = T2IParamTypes.Register<double>(new("LTX 2.3 Foley Audio CFG", "Audio guidance. Lightricks recommends 6; values below 6 can produce near-silent audio on some seeds.",
+            "6", Min: 0, Max: 20, Step: 0.1, ViewMax: 10, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -7, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyVideoCFG = T2IParamTypes.Register<double>(new("LTX 2.3 Foley Video CFG", "Video guidance for the frozen source-video branch.",
+            "1", Min: 0, Max: 20, Step: 0.1, ViewMax: 10, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -6, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleySTGScale = T2IParamTypes.Register<double>(new("LTX 2.3 Foley STG Scale", "Spatiotemporal guidance scale. The recommended Foley setting is 1 with block 29.",
+            "1", Min: 0, Max: 10, Step: 0.1, ViewMax: 3, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -5, DependNonDefault: FoleyAudioGeneration.Type.ID));
+        FoleyModalityScale = T2IParamTypes.Register<double>(new("LTX 2.3 Foley Modality Scale", "Cross-modality guidance strength between video and audio.",
+            "3", Min: 0, Max: 20, Step: 0.1, ViewMax: 10, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -4, DependNonDefault: FoleyAudioGeneration.Type.ID));
     }
 
     private static void PatchWorkflowSteps()
@@ -99,7 +144,322 @@ public class Ltxv2LatentUpscaleExtension : Extension
             Logs.Warning("Could not find Refiner step to patch");
         }
 
+        // Replace the ordinary base sampler with the dedicated V2A sampler when Foley is enabled.
+        int samplerIndex = steps.FindIndex(step => Math.Abs(step.Priority - (-5)) < 0.0001);
+        if (samplerIndex >= 0)
+        {
+            var originalSamplerAction = steps[samplerIndex].Action;
+            steps[samplerIndex] = new WorkflowGenerator.WorkflowGenStep(g =>
+            {
+                if (g.UserInput.Get(FoleyAudioGeneration, false))
+                {
+                    ApplyLtx23Foley(g);
+                    return;
+                }
+                originalSamplerAction(g);
+            }, -5);
+            Logs.Debug("Wrapped base sampler step (priority -5) for LTX 2.3 Foley V2A");
+        }
+        else
+        {
+            Logs.Warning("Could not find base sampler step to patch for LTX 2.3 Foley V2A");
+        }
+
         WorkflowGenerator.Steps = [.. steps.OrderBy(step => step.Priority)];
+    }
+
+    private static void ApplyLtx23Foley(WorkflowGenerator g)
+    {
+        if (g.FinalLoadedModel?.ModelClass?.CompatClass?.ID != T2IModelClassSorter.CompatLtxv2.ID)
+        {
+            throw new SwarmUserErrorException("LTX 2.3 Foley Audio requires an LTX 2.x base model.");
+        }
+        if (!g.UserInput.TryGet(T2IParamTypes.InitImage, out Image initVideo))
+        {
+            throw new SwarmUserErrorException("LTX 2.3 Foley Audio requires a video in Init Image.");
+        }
+        if (g.CurrentVae is null || g.CurrentAudioVae is null)
+        {
+            throw new SwarmUserErrorException("The selected LTX model did not provide both the video VAE and audio VAE required for Foley generation.");
+        }
+
+        int fps = g.UserInput.Get(T2IParamTypes.VideoFPS, 24);
+        bool autoReencodeInput = g.UserInput.Get(FoleyAutoReencodeInput, true);
+        bool autoLongVideo = g.UserInput.Get(FoleyAutoLongVideo, true);
+        int maximumFrames = g.UserInput.Get(FoleyMaximumFrames, 169);
+        int windowFrames = g.UserInput.Get(FoleyWindowFrames, 89);
+        double windowOverlap = g.UserInput.Get(FoleyWindowOverlap, 1);
+        int maximumWindows = g.UserInput.Get(FoleyMaximumWindows, 16);
+        int conditioningSize = g.UserInput.Get(FoleyConditioningSize, 576);
+        int steps = g.UserInput.Get(T2IParamTypes.Steps, 30);
+        long seed = g.UserInput.Get(T2IParamTypes.Seed);
+        double audioCfg = g.UserInput.Get(FoleyAudioCFG, 6);
+        double videoCfg = g.UserInput.Get(FoleyVideoCFG, 1);
+        double stg = g.UserInput.Get(FoleySTGScale, 1);
+        double modalityScale = g.UserInput.Get(FoleyModalityScale, 3);
+
+        if (initVideo.Type.MetaType != MediaMetaType.Video)
+        {
+            throw new SwarmUserErrorException("LTX 2.3 Foley Audio requires a video, not a still image, in Init Image.");
+        }
+
+        // Stream FPS conversion and frame limiting before materializing IMAGE tensors. Loading the
+        // complete source first can consume tens of GB of system RAM for long, high-FPS videos.
+        string sourceVideo = g.CreateNode("SwarmLoadVideoB64", new JObject()
+        {
+            ["video_base64"] = initVideo.AsBase64
+        });
+        if (autoLongVideo)
+        {
+            int longVideoFrameLimit = maximumFrames == 169 ? 4097 : maximumFrames;
+            ApplyLtx23FoleyLong(g, sourceVideo, fps, longVideoFrameLimit, windowFrames, windowOverlap,
+                maximumWindows, conditioningSize, steps, seed, audioCfg, videoCfg, stg, modalityScale);
+            return;
+        }
+        string preparedVideo = g.CreateNode("SwarmLTXFoleyVideoFrames", new JObject()
+        {
+            ["video"] = WorkflowGenerator.NodePath(sourceVideo, 0),
+            ["maximum_frames"] = maximumFrames,
+            ["target_fps"] = fps,
+            ["auto_reencode"] = autoReencodeInput
+        });
+        WGNodeData trimmedVideo = new([preparedVideo, 0], g, WGNodeData.DT_VIDEO, g.CurrentCompat()) { FPS = fps };
+        WGNodeData videoLatent = trimmedVideo.EncodeToLatent(g.CurrentVae);
+
+        string emptyAudio = g.CreateNode("LTXVEmptyLatentAudio", new JObject()
+        {
+            ["frames_number"] = WorkflowGenerator.NodePath(preparedVideo, 1),
+            ["frame_rate"] = fps,
+            ["batch_size"] = 1,
+            ["audio_vae"] = g.CurrentAudioVae.Path
+        });
+        string avLatent = g.CreateNode("LTXVConcatAVLatent", new JObject()
+        {
+            ["video_latent"] = videoLatent.Path,
+            ["audio_latent"] = WorkflowGenerator.NodePath(emptyAudio, 0)
+        });
+        string masked = g.CreateNode("LTXVSetAudioVideoMaskByTime", new JObject()
+        {
+            ["av_latent"] = WorkflowGenerator.NodePath(avLatent, 0),
+            ["positive"] = g.FinalPrompt,
+            ["negative"] = g.FinalNegativePrompt,
+            ["model"] = g.CurrentModel.Path,
+            ["vae"] = g.CurrentVae.Path,
+            ["audio_vae"] = g.CurrentAudioVae.Path,
+            ["start_time"] = 0.0,
+            ["end_time"] = 30.0,
+            ["video_fps"] = (double)fps,
+            ["mask_video"] = false,
+            ["mask_audio"] = true,
+            ["mask_init_value_video"] = 0.0,
+            ["mask_init_value_audio"] = 0.0,
+            ["slope_len"] = 1
+        });
+        string audioParams = g.CreateNode("GuiderParameters", new JObject()
+        {
+            ["modality"] = "AUDIO",
+            ["cfg"] = audioCfg,
+            ["stg"] = stg,
+            ["perturb_attn"] = true,
+            ["rescale"] = 0.0,
+            ["modality_scale"] = modalityScale,
+            ["skip_step"] = 0,
+            ["cross_attn"] = true
+        });
+        string videoParams = g.CreateNode("GuiderParameters", new JObject()
+        {
+            ["modality"] = "VIDEO",
+            ["cfg"] = videoCfg,
+            ["stg"] = stg,
+            ["perturb_attn"] = true,
+            ["rescale"] = 0.0,
+            ["modality_scale"] = modalityScale,
+            ["skip_step"] = 0,
+            ["cross_attn"] = true,
+            ["parameters"] = WorkflowGenerator.NodePath(audioParams, 0)
+        });
+        string guider = g.CreateNode("MultimodalGuider", new JObject()
+        {
+            ["model"] = g.CurrentModel.Path,
+            ["positive"] = WorkflowGenerator.NodePath(masked, 0),
+            ["negative"] = WorkflowGenerator.NodePath(masked, 1),
+            ["parameters"] = WorkflowGenerator.NodePath(videoParams, 0),
+            ["skip_blocks"] = "29"
+        });
+        string scheduler = g.CreateNode("LTXVScheduler", new JObject()
+        {
+            ["steps"] = steps,
+            ["max_shift"] = 2.05,
+            ["base_shift"] = 0.95,
+            ["stretch"] = true,
+            ["terminal"] = 0.1,
+            ["latent"] = WorkflowGenerator.NodePath(masked, 2)
+        });
+        string sampler = g.CreateNode("KSamplerSelect", new JObject() { ["sampler_name"] = "euler" });
+        string noise = g.CreateNode("RandomNoise", new JObject() { ["noise_seed"] = seed });
+        string sampled = g.CreateNode("SamplerCustomAdvanced", new JObject()
+        {
+            ["noise"] = WorkflowGenerator.NodePath(noise, 0),
+            ["guider"] = WorkflowGenerator.NodePath(guider, 0),
+            ["sampler"] = WorkflowGenerator.NodePath(sampler, 0),
+            ["sigmas"] = WorkflowGenerator.NodePath(scheduler, 0),
+            ["latent_image"] = WorkflowGenerator.NodePath(masked, 2)
+        });
+        string separated = g.CreateNode("LTXVSeparateAVLatent", new JObject()
+        {
+            ["av_latent"] = WorkflowGenerator.NodePath(sampled, 0)
+        });
+        string decodedAudio = g.CreateNode("LTXVAudioVAEDecode", new JObject()
+        {
+            ["samples"] = WorkflowGenerator.NodePath(separated, 1),
+            ["audio_vae"] = g.CurrentAudioVae.Path
+        });
+
+        g.CurrentMedia = trimmedVideo.Duplicate();
+        g.CurrentMedia.AttachedAudio = new WGNodeData([decodedAudio, 0], g, WGNodeData.DT_AUDIO, g.CurrentCompat());
+        g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, "9");
+        g.SkipFurtherSteps = true;
+        Logs.Info($"Created LTX 2.3 Foley V2A workflow (up to {maximumFrames} frames at {fps} FPS, auto reencode: {autoReencodeInput}, {steps} steps).");
+    }
+
+    private static void ApplyLtx23FoleyLong(WorkflowGenerator g, string sourceVideo, int fps, int maximumFrames,
+        int windowFrames, double windowOverlap, int maximumWindows, int conditioningSize, int steps, long seed,
+        double audioCfg, double videoCfg, double stg, double modalityScale)
+    {
+        if (windowFrames % 8 != 1)
+        {
+            throw new SwarmUserErrorException("LTX 2.3 Foley Window Frames must be one more than a multiple of 8 (for example 57, 89, or 169).");
+        }
+        string plan = g.CreateNode("SwarmLTXFoleyVideoWindowPlan", new JObject()
+        {
+            ["video"] = WorkflowGenerator.NodePath(sourceVideo, 0),
+            ["target_fps"] = (double)fps,
+            ["maximum_frames"] = maximumFrames,
+            ["window_frames"] = windowFrames,
+            ["overlap_seconds"] = windowOverlap,
+            ["max_windows"] = maximumWindows
+        });
+        string loopOpen = g.CreateNode("LTXFoleyForLoopOpen", new JObject()
+        {
+            ["remaining"] = WorkflowGenerator.NodePath(plan, 1)
+        });
+        string selected = g.CreateNode("SwarmLTXFoleyVideoWindowSelect", new JObject()
+        {
+            ["video"] = WorkflowGenerator.NodePath(sourceVideo, 0),
+            ["window_plan"] = WorkflowGenerator.NodePath(plan, 0),
+            ["remaining"] = WorkflowGenerator.NodePath(loopOpen, 1),
+            ["width"] = conditioningSize,
+            ["height"] = conditioningSize
+        });
+        string conditioning = g.CreateNode("LTXVConditioning", new JObject()
+        {
+            ["positive"] = g.FinalPrompt,
+            ["negative"] = g.FinalNegativePrompt,
+            ["frame_rate"] = (double)fps
+        });
+        string prepared = g.CreateNode("LTXFoleyVideoToAudioLatent", new JObject()
+        {
+            ["images"] = WorkflowGenerator.NodePath(selected, 0),
+            ["positive"] = WorkflowGenerator.NodePath(conditioning, 0),
+            ["negative"] = WorkflowGenerator.NodePath(conditioning, 1),
+            ["video_vae"] = g.CurrentVae.Path,
+            ["audio_vae"] = g.CurrentAudioVae.Path,
+            ["frame_rate"] = (double)fps,
+            ["width"] = conditioningSize,
+            ["height"] = conditioningSize,
+            ["frames"] = windowFrames
+        });
+        string audioParams = g.CreateNode("GuiderParameters", new JObject()
+        {
+            ["modality"] = "AUDIO",
+            ["cfg"] = audioCfg,
+            ["stg"] = stg,
+            ["perturb_attn"] = true,
+            ["rescale"] = 0.0,
+            ["modality_scale"] = modalityScale,
+            ["skip_step"] = 0,
+            ["cross_attn"] = true
+        });
+        string videoParams = g.CreateNode("GuiderParameters", new JObject()
+        {
+            ["modality"] = "VIDEO",
+            ["cfg"] = videoCfg,
+            ["stg"] = stg,
+            ["perturb_attn"] = true,
+            ["rescale"] = 0.0,
+            ["modality_scale"] = modalityScale,
+            ["skip_step"] = 0,
+            ["cross_attn"] = true,
+            ["parameters"] = WorkflowGenerator.NodePath(audioParams, 0)
+        });
+        string guider = g.CreateNode("MultimodalGuider", new JObject()
+        {
+            ["model"] = g.CurrentModel.Path,
+            ["positive"] = WorkflowGenerator.NodePath(prepared, 0),
+            ["negative"] = WorkflowGenerator.NodePath(prepared, 1),
+            ["parameters"] = WorkflowGenerator.NodePath(videoParams, 0),
+            ["skip_blocks"] = "29"
+        });
+        string scheduler = g.CreateNode("LTXVScheduler", new JObject()
+        {
+            ["steps"] = steps,
+            ["max_shift"] = 2.05,
+            ["base_shift"] = 0.95,
+            ["stretch"] = true,
+            ["terminal"] = 0.1,
+            ["latent"] = WorkflowGenerator.NodePath(prepared, 2)
+        });
+        string sampler = g.CreateNode("KSamplerSelect", new JObject() { ["sampler_name"] = "euler" });
+        string noise = g.CreateNode("RandomNoise", new JObject() { ["noise_seed"] = seed });
+        string sampled = g.CreateNode("SamplerCustomAdvanced", new JObject()
+        {
+            ["noise"] = WorkflowGenerator.NodePath(noise, 0),
+            ["guider"] = WorkflowGenerator.NodePath(guider, 0),
+            ["sampler"] = WorkflowGenerator.NodePath(sampler, 0),
+            ["sigmas"] = WorkflowGenerator.NodePath(scheduler, 0),
+            ["latent_image"] = WorkflowGenerator.NodePath(prepared, 2)
+        });
+        string separated = g.CreateNode("LTXVSeparateAVLatent", new JObject()
+        {
+            ["av_latent"] = WorkflowGenerator.NodePath(sampled, 0)
+        });
+        string decodedAudio = g.CreateNode("LTXFoleyAudioVAEDecode", new JObject()
+        {
+            ["samples"] = WorkflowGenerator.NodePath(separated, 1),
+            ["audio_vae"] = g.CurrentAudioVae.Path
+        });
+        string windowRecord = g.CreateNode("LTXFoleyWindowAudioSave", new JObject()
+        {
+            ["audio"] = WorkflowGenerator.NodePath(decodedAudio, 0),
+            ["window_info"] = WorkflowGenerator.NodePath(selected, 1),
+            ["save_audio"] = false,
+            ["filename_prefix"] = "swarm_ltx_foley_window"
+        });
+        string accumulation = g.CreateNode("LTXFoleyAudioAccumulator", new JObject()
+        {
+            ["window_record"] = WorkflowGenerator.NodePath(windowRecord, 1),
+            ["accumulation"] = WorkflowGenerator.NodePath(loopOpen, 2)
+        });
+        string loopClose = g.CreateNode("LTXFoleyForLoopClose", new JObject()
+        {
+            ["flow_control"] = WorkflowGenerator.NodePath(loopOpen, 0),
+            ["audio_accumulation"] = WorkflowGenerator.NodePath(accumulation, 0)
+        });
+        string stitched = g.CreateNode("LTXFoleyAudioStitch", new JObject()
+        {
+            ["accumulation"] = WorkflowGenerator.NodePath(loopClose, 0),
+            ["window_plan"] = WorkflowGenerator.NodePath(plan, 0)
+        });
+        g.CreateNode("SwarmLTXFoleyMuxVideoAudioWS", new JObject()
+        {
+            ["video"] = WorkflowGenerator.NodePath(sourceVideo, 0),
+            ["audio"] = WorkflowGenerator.NodePath(stitched, 0),
+            ["filename_prefix"] = "swarm_ltx_foley_long",
+            ["save_output"] = false
+        }, "9");
+        g.SkipFurtherSteps = true;
+        Logs.Info($"Created automatic long LTX 2.3 Foley workflow: up to {maximumFrames} frames at {fps} FPS, "
+            + $"{windowFrames}-frame windows, {windowOverlap:0.###}s overlap, max {maximumWindows} windows, {steps} steps each.");
     }
 
     private static bool ShouldApplyI2VUpscale(WorkflowGenerator g)
