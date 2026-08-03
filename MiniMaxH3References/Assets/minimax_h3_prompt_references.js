@@ -27,6 +27,7 @@ class MiniMaxH3PromptReferences {
         this.clearButton = document.getElementById('alt_prompt_image_clear_button');
         this.enabledInput = document.getElementById('input_minimaxhreferences');
         this.modelInput = document.getElementById('current_model');
+        this.backendModelInput = document.getElementById('input_model');
         if (!this.region || !this.extraArea || !this.referenceArea || !this.promptBox || !this.addButton) {
             return;
         }
@@ -37,6 +38,10 @@ class MiniMaxH3PromptReferences {
         this.observer.observe(this.referenceArea, { childList: true });
         this.enabledInput?.addEventListener('change', () => this.updateActiveState());
         this.modelInput?.addEventListener('change', () => {
+            this.deactivateForOtherModels();
+            this.updateActiveState();
+        });
+        this.backendModelInput?.addEventListener('change', () => {
             this.deactivateForOtherModels();
             this.updateActiveState();
         });
