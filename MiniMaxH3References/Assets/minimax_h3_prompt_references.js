@@ -36,7 +36,10 @@ class MiniMaxH3PromptReferences {
         this.observer = new MutationObserver(() => this.syncAll());
         this.observer.observe(this.referenceArea, { childList: true });
         this.enabledInput?.addEventListener('change', () => this.updateActiveState());
-        this.modelInput?.addEventListener('change', () => this.updateActiveState());
+        this.modelInput?.addEventListener('change', () => {
+            this.deactivateForOtherModels();
+            this.updateActiveState();
+        });
         this.syncAll();
         this.updateActiveState();
     }
@@ -124,10 +127,26 @@ class MiniMaxH3PromptReferences {
         }, true);
     }
 
-    isActive() {
-        let enabled = this.enabledInput?.checked;
+    isReferenceModel() {
         let model = `${this.modelInput?.value || ''}`.toLowerCase();
-        return enabled || model.includes('minimax_h3_ref2va');
+        return model.includes('minimax_h3_ref2va');
+    }
+
+    isActive() {
+        return this.isReferenceModel();
+    }
+
+    deactivateForOtherModels() {
+        if (this.isReferenceModel()) {
+            return;
+        }
+        if (this.enabledInput?.checked) {
+            this.enabledInput.checked = false;
+            triggerChangeFor(this.enabledInput);
+        }
+        for (let reference of [...this.references('video'), ...this.references('audio')]) {
+            reference.remove();
+        }
     }
 
     updateActiveState() {

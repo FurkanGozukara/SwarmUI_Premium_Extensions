@@ -23,7 +23,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 Ref2VA workflow and a unified prompt uploader for up to nine images, three videos, and three audio files.";
         License = "MIT";
-        Version = "1.1.0";
+        Version = "1.1.1";
 
         if (_initialized)
         {
@@ -103,7 +103,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         if (g.UserInput.TryGet(T2IParamTypes.InitImage, out Image _))
         {
-            throw new SwarmUserErrorException("MiniMax H3 References uses Prompt Images and the dedicated reference media fields. Remove the Init Image before generating.");
+            throw new SwarmUserErrorException("MiniMax H3 References uses the unified prompt reference uploader. Remove the Init Image before generating.");
         }
         if (g.CurrentTextEnc is null || g.CurrentVae is null || g.CurrentAudioVae is null)
         {
