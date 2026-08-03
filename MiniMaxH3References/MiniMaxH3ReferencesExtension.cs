@@ -21,9 +21,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void OnInit()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 Ref2VA reference workflow with up to nine images, three videos, and three audio files.";
+        Description = "Adds the complete MiniMax H3 Ref2VA workflow and a unified prompt uploader for up to nine images, three videos, and three audio files.";
         License = "MIT";
-        Version = "1.0.1";
+        Version = "1.1.0";
 
         if (_initialized)
         {
@@ -32,6 +32,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         _initialized = true;
 
+        ScriptFiles.Add("Assets/minimax_h3_prompt_references.js");
+        StyleSheetFiles.Add("Assets/minimax_h3_prompt_references.css");
         RegisterParameters();
         WorkflowGenerator.AddStep(ApplyReferences, -7.9);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
@@ -41,7 +43,7 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static void RegisterParameters()
     {
         T2IParamGroup group = new("MiniMax H3 References", Open: true, OrderPriority: 8,
-            Description: "Use Prompt Images for <Picture 1-9>, then optionally attach up to three reference videos and three standalone reference audio files. Video soundtracks are paired automatically. Use the matching <Picture i>, <Video i>, and <Audio i> tags in the prompt.");
+            Description: "Add every image, video, and audio reference directly beside the main prompt. Video soundtracks are paired automatically. Use the labels shown on the prompt attachments in the prompt text.");
         Enabled = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 References",
             "Enable the complete MiniMax H3 Ref2VA reference workflow. Select a Ref2VA model and supply at least one image, video, or audio reference.",
@@ -69,7 +71,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             return T2IParamTypes.Register<VideoFile>(new(
                 $"MiniMax H3 Reference Video {ordinal}",
-                "Reference video. The first 15 seconds are used, frames are resampled to the model-native 24 FPS, and an available soundtrack is paired automatically.",
+                "Internal slot populated by the MiniMax H3 prompt reference uploader. The first 15 seconds are used, frames are resampled to 24 FPS, and an available soundtrack is paired automatically.",
                 null, FeatureFlag: "comfyui", Group: group, OrderPriority: priority,
                 DependNonDefault: Enabled.Type.ID, DoNotPreview: true));
         }
@@ -78,7 +80,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             return T2IParamTypes.Register<AudioFile>(new(
                 $"MiniMax H3 Reference Audio {ordinal}",
-                "Standalone MiniMax H3 audio reference. Refer to it with the corresponding <Audio i> tag shown by the complete reference ordering.",
+                "Internal slot populated by the MiniMax H3 prompt reference uploader. Refer to it with the <Audio i> label shown on its prompt attachment.",
                 null, FeatureFlag: "comfyui", Group: group, OrderPriority: priority,
                 DependNonDefault: Enabled.Type.ID, DoNotPreview: true));
         }

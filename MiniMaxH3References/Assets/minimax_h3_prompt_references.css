@@ -1,0 +1,107 @@
+.minimax-h3-prompt-reference-toolbar {
+    align-items: center;
+    display: none;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0 0 0.4rem 0;
+}
+
+.minimax-h3-prompt-reference-upload {
+    border-radius: 6px !important;
+    min-height: 2rem;
+    padding: 0.25rem 0.75rem;
+}
+
+.minimax-h3-prompt-reference-status {
+    color: color-mix(in srgb, var(--text) 72%, var(--background));
+    font-size: 0.82rem;
+    white-space: normal;
+}
+
+.minimax-h3-prompt-reference-file-input,
+.minimax-h3-internal-reference-input {
+    display: none !important;
+}
+
+.minimax-h3-prompt-references-active.minimax-h3-prompt-reference-dragging {
+    outline: 2px solid var(--emphasis);
+    outline-offset: -2px;
+}
+
+.minimax-h3-prompt-references-active .alt-prompt-image-container,
+.minimax-h3-prompt-reference {
+    background: color-mix(in srgb, var(--background) 82%, var(--light-border));
+    border: 1px solid var(--light-border);
+    border-radius: 6px;
+    box-sizing: border-box;
+    display: inline-flex;
+    flex-direction: column;
+    margin: 2px;
+    max-width: 13rem;
+    min-height: 4.25rem;
+    min-width: 7rem;
+    overflow: hidden;
+    padding: 0.25rem;
+    position: relative;
+    vertical-align: top;
+}
+
+.minimax-h3-prompt-references-active .alt-prompt-image-container::after {
+    background: color-mix(in srgb, var(--background) 78%, var(--emphasis));
+    border-radius: 4px;
+    bottom: 0.35rem;
+    color: var(--text);
+    content: attr(data-reference-label);
+    font-size: 0.75rem;
+    left: 0.35rem;
+    line-height: 1.2;
+    padding: 0.15rem 0.35rem;
+    position: absolute;
+}
+
+.minimax-h3-prompt-reference-preview {
+    background: var(--background);
+    border-radius: 4px;
+    display: block;
+    height: 4.5rem;
+    max-width: 100%;
+    object-fit: contain;
+    width: 12rem;
+}
+
+audio.minimax-h3-prompt-reference-preview {
+    height: 3rem;
+    width: 12rem;
+}
+
+.minimax-h3-prompt-reference-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    line-height: 1.2;
+    margin-top: 0.25rem;
+}
+
+.minimax-h3-prompt-reference-name {
+    color: color-mix(in srgb, var(--text) 70%, var(--background));
+    display: block;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    max-width: 11.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+@media (max-width: 700px) {
+    .minimax-h3-prompt-reference-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .minimax-h3-prompt-reference,
+    .minimax-h3-prompt-reference-preview,
+    audio.minimax-h3-prompt-reference-preview {
+        max-width: 10rem;
+        width: 10rem;
+    }
+}
