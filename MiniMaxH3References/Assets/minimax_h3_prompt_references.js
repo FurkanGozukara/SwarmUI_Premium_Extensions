@@ -37,14 +37,9 @@ class MiniMaxH3PromptReferences {
         this.observer = new MutationObserver(() => this.syncAll());
         this.observer.observe(this.referenceArea, { childList: true });
         this.enabledInput?.addEventListener('change', () => this.updateActiveState());
-        this.modelInput?.addEventListener('change', () => {
-            this.deactivateForOtherModels();
-            this.updateActiveState();
-        });
-        this.backendModelInput?.addEventListener('change', () => {
-            this.deactivateForOtherModels();
-            this.updateActiveState();
-        });
+        this.modelInput?.addEventListener('change', () => this.handleModelChange());
+        this.backendModelInput?.addEventListener('change', () => this.handleModelChange());
+        this.deactivateForOtherModels();
         this.syncAll();
         this.updateActiveState();
     }
@@ -139,6 +134,16 @@ class MiniMaxH3PromptReferences {
 
     isActive() {
         return this.isReferenceModel();
+    }
+
+    handleModelChange() {
+        this.deactivateForOtherModels();
+        this.updateActiveState();
+        window.setTimeout(() => {
+            this.enabledInput = document.getElementById('input_minimaxhreferences');
+            this.deactivateForOtherModels();
+            this.updateActiveState();
+        }, 0);
     }
 
     deactivateForOtherModels() {
