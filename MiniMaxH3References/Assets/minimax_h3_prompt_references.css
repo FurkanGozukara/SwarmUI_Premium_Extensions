@@ -18,6 +18,15 @@
     white-space: normal;
 }
 
+.minimax-h3-prompt-reference-hint {
+    border: 1px dashed var(--light-border);
+    border-radius: 1rem;
+    color: color-mix(in srgb, var(--text) 58%, var(--background));
+    font-size: 0.75rem;
+    padding: 0.08rem 0.55rem;
+    white-space: nowrap;
+}
+
 .minimax-h3-prompt-reference-file-input,
 .minimax-h3-internal-reference-input {
     display: none !important;
@@ -46,13 +55,27 @@
     vertical-align: top;
 }
 
+.minimax-h3-prompt-references-active .alt-prompt-image-container,
+.minimax-h3-prompt-references-active .minimax-h3-prompt-reference {
+    border-color: color-mix(in srgb, var(--minimax-ref-color, var(--light-border)) 60%, var(--light-border));
+    cursor: pointer;
+}
+
+.minimax-h3-prompt-references-active .alt-prompt-image-container:hover,
+.minimax-h3-prompt-references-active .minimax-h3-prompt-reference:hover {
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--minimax-ref-color, var(--emphasis)) 55%, transparent);
+}
+
 .minimax-h3-prompt-references-active .alt-prompt-image-container::after {
-    background: color-mix(in srgb, var(--background) 78%, var(--emphasis));
+    background: color-mix(in srgb, var(--minimax-ref-color, var(--emphasis)) 24%, var(--background));
     border-radius: 4px;
     bottom: 0.35rem;
-    color: var(--text);
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--minimax-ref-color, var(--emphasis)) 60%, transparent);
+    color: var(--minimax-ref-color, var(--text));
     content: attr(data-reference-label);
+    font-family: monospace;
     font-size: 0.75rem;
+    font-weight: 600;
     left: 0.35rem;
     line-height: 1.2;
     padding: 0.15rem 0.35rem;
@@ -75,6 +98,8 @@ audio.minimax-h3-prompt-reference-preview {
 }
 
 .minimax-h3-prompt-reference-label {
+    color: var(--minimax-ref-color, var(--text));
+    font-family: monospace;
     font-size: 0.78rem;
     font-weight: 600;
     line-height: 1.2;
@@ -87,6 +112,110 @@ audio.minimax-h3-prompt-reference-preview {
     font-size: 0.7rem;
     line-height: 1.2;
     max-width: 11.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ==================== Prompt-bar colored token pills ==================== */
+
+.minimax-h3-overlay-host {
+    position: relative;
+}
+
+.minimax-h3-prompt-highlight {
+    background: transparent;
+    border: none;
+    box-sizing: border-box;
+    color: var(--text);
+    margin: 0;
+    overflow: hidden;
+    overflow-wrap: break-word;
+    pointer-events: none;
+    position: absolute;
+    white-space: pre-wrap;
+    word-break: normal;
+    z-index: 3;
+}
+
+#alt_prompt_textbox.minimax-h3-highlight-on {
+    caret-color: var(--text);
+    color: transparent;
+}
+
+#alt_prompt_textbox.minimax-h3-highlight-on::placeholder {
+    color: color-mix(in srgb, var(--text) 50%, transparent);
+    opacity: 1;
+}
+
+#alt_prompt_textbox.minimax-h3-highlight-on::selection {
+    background: color-mix(in srgb, var(--emphasis, #7d5698) 40%, transparent);
+    color: transparent;
+}
+
+.minimax-h3-token {
+    background: color-mix(in srgb, var(--minimax-ref-color) 17%, transparent);
+    border-radius: 0.3em;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--minimax-ref-color) 55%, transparent);
+    color: var(--minimax-ref-color);
+}
+
+.minimax-h3-token-invalid {
+    --minimax-ref-color: #ff6b6b;
+    text-decoration: underline wavy color-mix(in srgb, #ff6b6b 80%, transparent) 1px;
+}
+
+/* ==================== '@' reference autocomplete popover ==================== */
+
+.sui_popover_model_button.minimax-h3-suggest-header-row {
+    border-bottom: 1px solid var(--light-border);
+    color: color-mix(in srgb, var(--text) 55%, var(--background));
+    cursor: default;
+    font-size: 0.68rem;
+    letter-spacing: 0.09em;
+    margin-bottom: 0.15rem;
+    min-height: 1.2rem;
+    pointer-events: none;
+    text-transform: uppercase;
+}
+
+.sui_popover_model_button.minimax-h3-suggest-item {
+    align-items: center;
+    display: flex;
+    gap: 0.45rem;
+    min-height: 1.9rem;
+    padding: 0.15rem 0.4rem;
+}
+
+.minimax-h3-suggest-thumb {
+    border: 1px solid;
+    border-radius: 0.3rem;
+    flex-shrink: 0;
+    height: 1.5rem;
+    object-fit: cover;
+    width: 1.5rem;
+}
+
+.minimax-h3-suggest-thumb-icon {
+    align-items: center;
+    background: color-mix(in srgb, currentColor 15%, transparent);
+    display: inline-flex;
+    font-size: 0.85rem;
+    justify-content: center;
+}
+
+.minimax-h3-suggest-token {
+    font-family: monospace;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.minimax-h3-suggest-name {
+    color: color-mix(in srgb, var(--text) 60%, var(--background));
+    font-size: 0.75rem;
+    max-width: 14rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

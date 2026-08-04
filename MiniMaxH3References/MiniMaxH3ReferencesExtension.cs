@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Builtin_ComfyUIBackend;
 using SwarmUI.Core;
@@ -21,9 +22,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void OnInit()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow and a unified prompt uploader for up to nine images, three videos, and three audio files.";
+        Description = "Adds the complete MiniMax H3 reference workflow and a unified prompt uploader for up to nine images, three videos, and three audio files, with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete.";
         License = "MIT";
-        Version = "1.2.0";
+        Version = "1.3.0";
 
         if (_initialized)
         {
@@ -43,7 +44,7 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static void RegisterParameters()
     {
         T2IParamGroup group = new("MiniMax H3 References", Open: true, OrderPriority: 8,
-            Description: "Add every image, video, and audio reference directly beside the main prompt. Video soundtracks are paired automatically. Use the labels shown on the prompt attachments in the prompt text.");
+            Description: "Add every image, video, and audio reference directly beside the main prompt. Video soundtracks are paired automatically. Type '@' in the prompt to reference attachments, eg '@image1' or '@video2' (legacy '<Picture 1>' labels still work).");
         Enabled = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 References",
             "Enable the complete MiniMax H3 reference workflow. Select any MiniMax H3 model and supply at least one image, video, or audio reference.",
@@ -80,7 +81,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             return T2IParamTypes.Register<AudioFile>(new(
                 $"MiniMax H3 Reference Audio {ordinal}",
-                "Internal slot populated by the MiniMax H3 prompt reference uploader. Refer to it with the <Audio i> label shown on its prompt attachment.",
+                "Internal slot populated by the MiniMax H3 prompt reference uploader. Refer to it with the @audio token shown on its prompt attachment.",
                 null, FeatureFlag: "comfyui", Group: group, OrderPriority: priority,
                 DependNonDefault: Enabled.Type.ID, DoNotPreview: true));
         }
@@ -112,7 +113,9 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         List<VideoFile> videos = GetValues(g, ReferenceVideos);
         List<AudioFile> audios = GetValues(g, ReferenceAudios);
-        if (g.UserInput.TryGet(T2IParamTypes.VideoAudioReference, out AudioFile legacyAudio))
+        int standaloneAudioCount = audios.Count;
+        bool hasLegacyAudio = g.UserInput.TryGet(T2IParamTypes.VideoAudioReference, out AudioFile legacyAudio);
+        if (hasLegacyAudio)
         {
             audios.Insert(0, legacyAudio);
         }
@@ -124,6 +127,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             throw new SwarmUserErrorException("MiniMax H3 References needs at least one Prompt Image, reference video, or reference audio file.");
         }
+        string prompt = TranslatePromptReferenceTokens(g.UserInput.Get(T2IParamTypes.Prompt, ""),
+            images.Count, videos.Count, standaloneAudioCount, videos.Count + (hasLegacyAudio ? 1 : 0));
 
         int frameCount = WorkflowGenerator.MiniMaxH3AlignFrames(g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 124));
         JObject inputs = new()
@@ -131,7 +136,7 @@ public class MiniMaxH3ReferencesExtension : Extension
             ["clip"] = g.CurrentTextEnc.Path,
             ["vae"] = g.CurrentVae.Path,
             ["audio_vae"] = g.CurrentAudioVae.Path,
-            ["prompt"] = g.UserInput.Get(T2IParamTypes.Prompt, ""),
+            ["prompt"] = prompt,
             ["width"] = g.UserInput.GetImageWidth(),
             ["height"] = g.UserInput.GetImageHeight(),
             ["length"] = frameCount,
@@ -204,6 +209,45 @@ public class MiniMaxH3ReferencesExtension : Extension
         g.CreateNode("MiniMaxH3ReferenceToVideo", inputs, "6");
         g.FinalPrompt = ["6", 0];
         Logs.Info($"Created MiniMax H3 reference workflow with {images.Count} image, {videos.Count} video, and {audios.Count} standalone audio reference(s).");
+    }
+
+    private static readonly Regex PromptReferenceTokenMatcher = new(
+        @"(?<![\w@])@(?<type>image|img|picture|pic|video|vid|audio|aud|sound)#?(?<num>\d{1,2})(?![0-9A-Za-z])",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Translates prompt-bar "@image1" / "@video2" / "@audio3" reference tokens into the
+    /// "&lt;Picture 1&gt;" / "&lt;Video 2&gt;" / "&lt;Audio n&gt;" labels the MiniMax H3 node expects.
+    /// Audio labels index video soundtracks first, so standalone audio tokens are offset by the
+    /// video count (and by the legacy audio reference, when present). Legacy labels typed directly
+    /// in the prompt pass through unchanged.
+    /// </summary>
+    public static string TranslatePromptReferenceTokens(string prompt, int imageCount, int videoCount, int standaloneAudioCount, int audioLabelOffset)
+    {
+        if (string.IsNullOrEmpty(prompt) || !prompt.Contains('@'))
+        {
+            return prompt;
+        }
+        return PromptReferenceTokenMatcher.Replace(prompt, match =>
+        {
+            string type = match.Groups["type"].Value.ToLowerInvariant();
+            int number = int.Parse(match.Groups["num"].Value);
+            (string label, string noun, int count, int offset) = type switch
+            {
+                "image" or "img" or "picture" or "pic" => ("Picture", "image", imageCount, 0),
+                "video" or "vid" => ("Video", "video", videoCount, 0),
+                _ => ("Audio", "audio", standaloneAudioCount, audioLabelOffset),
+            };
+            if (number < 1)
+            {
+                throw new SwarmUserErrorException($"The prompt reference '{match.Value}' is invalid: reference numbering starts at 1, eg '@{noun}1'.");
+            }
+            if (number > count)
+            {
+                throw new SwarmUserErrorException($"The prompt references '{match.Value}' but only {count} {noun} reference{(count == 1 ? " is" : "s are")} attached.");
+            }
+            return $"<{label} {offset + number}>";
+        });
     }
 
     /// <summary>
