@@ -114,7 +114,17 @@ public class MiniMaxH3ReferencesExtension : Extension
         List<VideoFile> videos = GetValues(g, ReferenceVideos);
         List<AudioFile> audios = GetValues(g, ReferenceAudios);
         int standaloneAudioCount = audios.Count;
-        bool hasLegacyAudio = g.UserInput.TryGet(T2IParamTypes.VideoAudioReference, out AudioFile legacyAudio);
+        // The core 'Video Audio Reference' param no longer exists in newer SwarmUI versions,
+        // so resolve it by ID at runtime instead of a compile-time field reference. On old
+        // SwarmUI this reads the exact same param; on new SwarmUI it is simply absent.
+        AudioFile legacyAudio = null;
+        if (T2IParamTypes.Types.TryGetValue("videoaudioreference", out T2IParamType legacyAudioType)
+            && g.UserInput.TryGetRaw(legacyAudioType, out object legacyAudioValue)
+            && legacyAudioValue is AudioFile legacyAudioFile)
+        {
+            legacyAudio = legacyAudioFile;
+        }
+        bool hasLegacyAudio = legacyAudio is not null;
         if (hasLegacyAudio)
         {
             audios.Insert(0, legacyAudio);
