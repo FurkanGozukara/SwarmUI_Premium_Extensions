@@ -19,13 +19,18 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static List<T2IRegisteredParam<VideoFile>> ReferenceVideos = [];
     private static List<T2IRegisteredParam<AudioFile>> ReferenceAudios = [];
 
-    public override void OnInit()
+    /// <summary>This extension is installed by the SECourses updater rather than a git clone, so metadata is set directly instead of read from git.</summary>
+    public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 reference workflow and a unified prompt uploader for up to nine images, three videos, and three audio files, with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete.";
         License = "MIT";
         Version = "1.3.0";
+        ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
+    }
 
+    public override void OnInit()
+    {
         if (_initialized)
         {
             Logs.Info("MiniMax H3 References extension is already initialized.");

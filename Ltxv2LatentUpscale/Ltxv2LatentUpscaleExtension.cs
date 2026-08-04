@@ -28,13 +28,18 @@ public class Ltxv2LatentUpscaleExtension : Extension
     private static T2IRegisteredParam<double> FoleySTGScale;
     private static T2IRegisteredParam<double> FoleyModalityScale;
 
-    public override void OnInit()
+    /// <summary>This extension is installed by the SECourses updater rather than a git clone, so metadata is set directly instead of read from git.</summary>
+    public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds LTXV2 latent upscaling and native LTX 2.3 Foley video-to-audio generation.";
         License = "MIT";
         Version = "0.8.0";
+        ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
+    }
 
+    public override void OnInit()
+    {
         if (_patched)
         {
             Logs.Info("LTXV2 I2V Latent Upscale extension already patched.");

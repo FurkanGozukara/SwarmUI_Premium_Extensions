@@ -21,13 +21,18 @@ public class LiconMSRExtension : Extension
     private static T2IRegisteredParam<int> ReferenceFrames;
     private static T2IRegisteredParam<double> GuideStrength;
 
-    public override void OnInit()
+    /// <summary>This extension is installed by the SECourses updater rather than a git clone, so metadata is set directly instead of read from git.</summary>
+    public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the LiconStudio LTX 2.3 Multiple Subject Reference V2 workflow.";
         License = "MIT";
         Version = "1.0.0";
+        ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
+    }
 
+    public override void OnInit()
+    {
         if (_patched)
         {
             Logs.Info("LTX 2.3 Licon MSR extension is already initialized.");
