@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
@@ -14,9 +15,11 @@ namespace FurkanGozukara.SwarmExtensions.InitVideoContinuation;
 /// <summary>Continues an Init Image video from its last frame and joins the result back onto the source video.</summary>
 public class InitVideoContinuationExtension : Extension
 {
-    private sealed class ContinuationState(WGNodeData originalVideo)
+    private sealed class ContinuationState(WGNodeData originalVideo, double? sourceDuration)
     {
         public WGNodeData OriginalVideo = originalVideo;
+
+        public double? SourceDuration = sourceDuration;
     }
 
     private static readonly ConditionalWeakTable<WorkflowGenerator, ContinuationState> States = new();
@@ -36,7 +39,7 @@ public class InitVideoContinuationExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Turns an Init Image video into a simple last-frame continuation and saves the source and generated video as one result.";
         License = "MIT";
-        Version = "1.0.1";
+        Version = "1.1.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/InitVideoContinuation";
     }
 
@@ -48,6 +51,9 @@ public class InitVideoContinuationExtension : Extension
             return;
         }
         _initialized = true;
+
+        ScriptFiles.Add("Assets/init_video_continuation.js");
+        RegisterAdditionalVideoTypes();
 
         ContinueInitVideo = T2IParamTypes.Register<bool>(new(
             "Continue Init Video From Last Frame",
@@ -73,7 +79,7 @@ public class InitVideoContinuationExtension : Extension
         }
         if (initImage.Type.MetaType != MediaMetaType.Video)
         {
-            throw new SwarmUserErrorException("Continue Init Video From Last Frame requires the Init Image input to be an MP4, WebM, or MOV video.");
+            throw new SwarmUserErrorException("Continue Init Video From Last Frame requires a supported video file in Init Image.");
         }
         if (!g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel _))
         {
@@ -94,7 +100,7 @@ public class InitVideoContinuationExtension : Extension
         }
         WGNodeData originalVideo = processedVideo.WithPath(originalVideoPath, WGNodeData.DT_VIDEO);
         States.Remove(g);
-        States.Add(g, new ContinuationState(originalVideo));
+        States.Add(g, new ContinuationState(originalVideo, GetSourceDuration(g)));
 
         string frameCount = g.CreateNode("SwarmCountFrames", new JObject()
         {
@@ -207,7 +213,7 @@ public class InitVideoContinuationExtension : Extension
             WGNodeData mergedVideo = generatedVideo.WithPath(WorkflowGenerator.NodePath(joinedVideo, 0), WGNodeData.DT_VIDEO);
             mergedVideo.FPS = outputFps;
             mergedVideo.Frames = null;
-            mergedVideo.AttachedAudio = AppendAudio(g, state.OriginalVideo.AttachedAudio, generatedVideo.AttachedAudio);
+            mergedVideo.AttachedAudio = AppendAudio(g, state.OriginalVideo.AttachedAudio, generatedVideo.AttachedAudio, state.SourceDuration);
             g.CurrentMedia = mergedVideo;
 
             RemoveAutomaticOutput(g, "9");
@@ -221,7 +227,7 @@ public class InitVideoContinuationExtension : Extension
         }
     }
 
-    private static WGNodeData AppendAudio(WorkflowGenerator g, WGNodeData sourceAudio, WGNodeData generatedAudio)
+    private static WGNodeData AppendAudio(WorkflowGenerator g, WGNodeData sourceAudio, WGNodeData generatedAudio, double? sourceDuration)
     {
         sourceAudio = DecodeAudio(g, sourceAudio);
         generatedAudio = DecodeAudio(g, generatedAudio);
@@ -232,6 +238,21 @@ public class InitVideoContinuationExtension : Extension
         if (generatedAudio is null)
         {
             return sourceAudio;
+        }
+        if (sourceDuration.HasValue)
+        {
+            string ensured = g.CreateNode("SwarmEnsureAudio", new JObject()
+            {
+                ["audio"] = ClonePath(sourceAudio.Path),
+                ["target_duration"] = sourceDuration.Value
+            });
+            string trimmed = g.CreateNode("TrimAudioDuration", new JObject()
+            {
+                ["audio"] = WorkflowGenerator.NodePath(ensured, 0),
+                ["start_index"] = 0,
+                ["duration"] = sourceDuration.Value
+            });
+            sourceAudio = sourceAudio.WithPath(WorkflowGenerator.NodePath(trimmed, 0), WGNodeData.DT_AUDIO);
         }
         string concatenated = g.CreateNode("AudioConcat", new JObject()
         {
@@ -254,6 +275,36 @@ public class InitVideoContinuationExtension : Extension
             return audio.DecodeLatents(g.CurrentAudioVae, true);
         }
         return null;
+    }
+
+    private static double? GetSourceDuration(WorkflowGenerator g)
+    {
+        string key = $"{T2IParamTypes.InitImage.Type.ID}_duration";
+        if (!g.UserInput.ExtraMeta.TryGetValue(key, out object durationRaw))
+        {
+            return null;
+        }
+        string durationText = Convert.ToString(durationRaw, CultureInfo.InvariantCulture);
+        if (double.TryParse(durationText, NumberStyles.Float, CultureInfo.InvariantCulture, out double duration)
+            && double.IsFinite(duration)
+            && duration > 0)
+        {
+            return duration;
+        }
+        return null;
+    }
+
+    private static void RegisterAdditionalVideoTypes()
+    {
+        MediaType.Register(new("mkv", "video/x-matroska", MediaMetaType.Video));
+        MediaType.Register(new("avi", "video/x-msvideo", MediaMetaType.Video));
+        MediaType.Register(new("m4v", "video/x-m4v", MediaMetaType.Video));
+        MediaType.Register(new("mpeg", "video/mpeg", MediaMetaType.Video, ["mpg"]));
+        MediaType.Register(new("ts", "video/mp2t", MediaMetaType.Video, ["m2ts", "mts"]));
+        MediaType.Register(new("wmv", "video/x-ms-wmv", MediaMetaType.Video));
+        MediaType.Register(new("flv", "video/x-flv", MediaMetaType.Video));
+        MediaType.Register(new("ogv", "video/ogg", MediaMetaType.Video));
+        MediaType.Register(new("3gp", "video/3gpp", MediaMetaType.Video));
     }
 
     private static void ClearVideoMetadata(WGNodeData media, WGNodeData attachedAudio)
