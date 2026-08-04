@@ -9,7 +9,7 @@ using SwarmUI.Utils;
 
 namespace FurkanGozukara.SwarmExtensions.MiniMaxH3References;
 
-/// <summary>Adds complete MiniMax H3 Ref2VA image, video, and audio reference inputs to SwarmUI.</summary>
+/// <summary>Adds complete MiniMax H3 image, video, and audio reference inputs to SwarmUI.</summary>
 public class MiniMaxH3ReferencesExtension : Extension
 {
     private static bool _initialized;
@@ -21,9 +21,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void OnInit()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 Ref2VA workflow and a unified prompt uploader for up to nine images, three videos, and three audio files.";
+        Description = "Adds the complete MiniMax H3 reference workflow and a unified prompt uploader for up to nine images, three videos, and three audio files.";
         License = "MIT";
-        Version = "1.1.1";
+        Version = "1.2.0";
 
         if (_initialized)
         {
@@ -46,7 +46,7 @@ public class MiniMaxH3ReferencesExtension : Extension
             Description: "Add every image, video, and audio reference directly beside the main prompt. Video soundtracks are paired automatically. Use the labels shown on the prompt attachments in the prompt text.");
         Enabled = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 References",
-            "Enable the complete MiniMax H3 Ref2VA reference workflow. Select a Ref2VA model and supply at least one image, video, or audio reference.",
+            "Enable the complete MiniMax H3 reference workflow. Select any MiniMax H3 model and supply at least one image, video, or audio reference.",
             "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: group, OrderPriority: -10, ChangeWeight: 8));
         ReferenceImageSize = T2IParamTypes.Register<string>(new(
             "MiniMax H3 Reference Image Size",
@@ -94,12 +94,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         if (!g.IsMiniMaxH3())
         {
-            throw new SwarmUserErrorException("MiniMax H3 References requires a MiniMax H3 Ref2VA model.");
-        }
-        string modelName = $"{g.FinalLoadedModel?.Name} {g.FinalLoadedModel?.Title}";
-        if (!modelName.Contains("ref2va", StringComparison.OrdinalIgnoreCase))
-        {
-            throw new SwarmUserErrorException("MiniMax H3 References requires a Ref2VA checkpoint. Select minimax_h3_ref2va_pruned_int8_convrot or another Ref2VA model.");
+            throw new SwarmUserErrorException("MiniMax H3 References requires a MiniMax H3 model.");
         }
         if (g.UserInput.TryGet(T2IParamTypes.InitImage, out Image _))
         {
@@ -208,7 +203,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         g.CreateNode("MiniMaxH3ReferenceToVideo", inputs, "6");
         g.FinalPrompt = ["6", 0];
-        Logs.Info($"Created MiniMax H3 Ref2VA workflow with {images.Count} image, {videos.Count} video, and {audios.Count} standalone audio reference(s).");
+        Logs.Info($"Created MiniMax H3 reference workflow with {images.Count} image, {videos.Count} video, and {audios.Count} standalone audio reference(s).");
     }
 
     /// <summary>

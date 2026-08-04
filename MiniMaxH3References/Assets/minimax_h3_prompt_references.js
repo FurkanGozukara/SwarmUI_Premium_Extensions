@@ -127,13 +127,13 @@ class MiniMaxH3PromptReferences {
         }, true);
     }
 
-    isReferenceModel() {
-        let model = `${this.modelInput?.value || ''}`.toLowerCase();
-        return model.includes('minimax_h3_ref2va');
+    isMiniMaxH3Model() {
+        return typeof currentModelHelper !== 'undefined'
+            && currentModelHelper.curCompatClass === 'minimax-h3';
     }
 
     isActive() {
-        return this.isReferenceModel();
+        return this.isMiniMaxH3Model();
     }
 
     handleModelChange() {
@@ -147,7 +147,7 @@ class MiniMaxH3PromptReferences {
     }
 
     deactivateForOtherModels() {
-        if (this.isReferenceModel()) {
+        if (this.isMiniMaxH3Model()) {
             return;
         }
         if (this.enabledInput?.checked) {
