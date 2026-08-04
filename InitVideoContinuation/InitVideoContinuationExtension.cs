@@ -56,7 +56,7 @@ public class InitVideoContinuationExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Turns an Init Image video into a simple last-frame continuation and saves the source and generated video as one result.";
         License = "MIT";
-        Version = "1.2.0";
+        Version = "1.2.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/InitVideoContinuation";
     }
 
@@ -285,7 +285,8 @@ public class InitVideoContinuationExtension : Extension
             WGNodeData mergedVideo = generatedVideo.WithPath(WorkflowGenerator.NodePath(joinedVideo, 0), WGNodeData.DT_VIDEO);
             mergedVideo.FPS = outputFps;
             mergedVideo.Frames = null;
-            mergedVideo.AttachedAudio = AppendAudio(g, state.OriginalVideo.AttachedAudio, generatedVideo.AttachedAudio, state.SourceDuration);
+            mergedVideo.AttachedAudio = AppendAudio(g, state.OriginalVideo.AttachedAudio, generatedVideo.AttachedAudio,
+                state.SourceDuration, WorkflowGenerator.NodePath(resampledOriginal, 0), outputFps);
             g.CurrentMedia = mergedVideo;
 
             RemoveAutomaticOutput(g, "9");
@@ -322,12 +323,26 @@ public class InitVideoContinuationExtension : Extension
         Logs.Info("Streaming merge will append generated frames 1 through the end with FFmpeg; generated frame 0 is skipped to prevent a duplicate boundary frame.");
     }
 
-    private static WGNodeData AppendAudio(WorkflowGenerator g, WGNodeData sourceAudio, WGNodeData generatedAudio, double? sourceDuration)
+    private static WGNodeData AppendAudio(WorkflowGenerator g, WGNodeData sourceAudio, WGNodeData generatedAudio,
+        double? sourceDuration, JArray sourceImages, JToken fps)
     {
         sourceAudio = DecodeAudio(g, sourceAudio);
         generatedAudio = DecodeAudio(g, generatedAudio);
         if (sourceAudio is null)
         {
+            if (generatedAudio is not null
+                && !WorkflowGenerator.RestrictCustomNodes
+                && g.Features.Contains(StreamingFeature))
+            {
+                string aligned = g.CreateNode("SwarmInitVideoPrependSourceSilence", new JObject()
+                {
+                    ["audio"] = ClonePath(generatedAudio.Path),
+                    ["source_images"] = ClonePath(sourceImages),
+                    ["fps"] = fps.DeepClone(),
+                    ["source_duration_hint"] = sourceDuration ?? 0
+                });
+                return generatedAudio.WithPath(WorkflowGenerator.NodePath(aligned, 0), WGNodeData.DT_AUDIO);
+            }
             return generatedAudio;
         }
         if (generatedAudio is null)

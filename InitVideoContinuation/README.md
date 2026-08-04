@@ -30,6 +30,10 @@ stream the source through FFmpeg. Only the extracted last frame and the model's
 newly generated frame batch need to be materialized as tensors. Source audio is
 kept at the beginning, generated audio starts at the continuation boundary, and
 silence is inserted on either side when just one segment has audio.
+The frame-batch fallback likewise delays generated-only audio until after a
+silent source segment. Visual duration is measured from the video stream rather
+than the overall container, preventing audio encoder padding from adding a held
+boundary frame.
 
 ## Video compatibility
 

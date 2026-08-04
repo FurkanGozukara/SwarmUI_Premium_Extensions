@@ -117,23 +117,9 @@ def _materialize_source(video, directory: str) -> str:
     raise ValueError("The ComfyUI VIDEO input does not expose a stream source.")
 
 
-def _source_duration(video, source_path: str, duration_hint: float) -> float:
-    get_duration = getattr(video, "get_duration", None)
-    if callable(get_duration):
-        try:
-            duration = float(get_duration())
-            if _finite_positive(duration):
-                return duration
-        except (av.error.FFmpegError, OSError, TypeError, ValueError):
-            pass
-    if _finite_positive(duration_hint):
-        return float(duration_hint)
-
+def _video_stream_duration(source_path: str) -> float | None:
+    # Container duration can include audio encoder padding, so measure the visual timeline directly.
     with av.open(source_path, mode="r") as container:
-        if container.duration is not None:
-            duration = float(container.duration / av.time_base)
-            if _finite_positive(duration):
-                return duration
         if container.streams.video:
             stream = container.streams.video[0]
             if stream.duration is not None and stream.time_base is not None:
@@ -144,6 +130,68 @@ def _source_duration(video, source_path: str, duration_hint: float) -> float:
                 duration = float(stream.frames / stream.average_rate)
                 if _finite_positive(duration):
                     return duration
+
+            first_timestamp = None
+            last_end = None
+            fallback_frame_duration = None
+            if stream.average_rate:
+                try:
+                    fallback_frame_duration = 1.0 / float(stream.average_rate)
+                except (TypeError, ValueError, ZeroDivisionError):
+                    pass
+            for packet in container.demux(stream):
+                timestamp = packet.pts if packet.pts is not None else packet.dts
+                if timestamp is None or stream.time_base is None:
+                    continue
+                packet_start = float(timestamp * stream.time_base)
+                packet_duration = float((packet.duration or 0) * stream.time_base)
+                if not _finite_positive(packet_duration):
+                    packet_duration = fallback_frame_duration or 0.0
+                first_timestamp = packet_start if first_timestamp is None else min(first_timestamp, packet_start)
+                packet_end = packet_start + packet_duration
+                last_end = packet_end if last_end is None else max(last_end, packet_end)
+            if first_timestamp is not None and last_end is not None:
+                duration = last_end - first_timestamp
+                if _finite_positive(duration):
+                    return duration
+    return None
+
+
+def _source_duration(video, source_path: str, duration_hint: float) -> float:
+    stream_duration = _video_stream_duration(source_path)
+    start_time, trim_duration = _active_trim_window(video)
+    if _finite_positive(stream_duration):
+        available_duration = max(0.0, stream_duration - start_time)
+        if _finite_positive(trim_duration):
+            return min(float(trim_duration), available_duration)
+        if _finite_positive(duration_hint) and float(duration_hint) < available_duration:
+            return float(duration_hint)
+        get_duration = getattr(video, "get_duration", None)
+        if callable(get_duration):
+            try:
+                duration = float(get_duration())
+                if _finite_positive(duration) and duration < available_duration:
+                    return duration
+            except (av.error.FFmpegError, OSError, TypeError, ValueError):
+                pass
+        if _finite_positive(available_duration):
+            return available_duration
+
+    get_duration = getattr(video, "get_duration", None)
+    if callable(get_duration):
+        try:
+            duration = float(get_duration())
+            if _finite_positive(duration):
+                return duration
+        except (av.error.FFmpegError, OSError, TypeError, ValueError):
+            pass
+    if _finite_positive(duration_hint):
+        return float(duration_hint)
+    with av.open(source_path, mode="r") as container:
+        if container.duration is not None:
+            duration = float(container.duration / av.time_base)
+            if _finite_positive(duration):
+                return duration
     raise ValueError("Could not determine the input video's duration.")
 
 
@@ -343,6 +391,46 @@ class SwarmInitVideoLastFrame:
         return (_decode_last_frame(video),)
 
 
+class SwarmInitVideoPrependSourceSilence:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "audio": ("AUDIO",),
+                "source_images": ("IMAGE",),
+                "fps": ("FLOAT", {"default": 24.0, "min": 0.01, "max": 1000.0, "step": 0.01}),
+                "source_duration_hint": (
+                    "FLOAT",
+                    {"default": 0.0, "min": 0.0, "max": 31536000.0, "step": 0.01},
+                ),
+            }
+        }
+
+    RETURN_TYPES = ("AUDIO",)
+    FUNCTION = "prepend"
+    CATEGORY = "SwarmUI/audio"
+    DESCRIPTION = "Keeps generated audio aligned after a silent source-video segment."
+
+    def prepend(self, audio, source_images, fps, source_duration_hint):
+        if not isinstance(audio, dict) or "waveform" not in audio or "sample_rate" not in audio:
+            raise ValueError("Generated continuation audio is invalid.")
+        waveform = audio["waveform"]
+        if not isinstance(waveform, torch.Tensor) or waveform.ndim != 3:
+            raise ValueError("Generated continuation audio must be a three-dimensional waveform tensor.")
+        sample_rate = int(audio["sample_rate"])
+        if sample_rate <= 0:
+            raise ValueError(f"Generated continuation audio has an invalid sample rate: {sample_rate}.")
+
+        duration = float(source_duration_hint)
+        if not _finite_positive(duration):
+            if not _finite_positive(fps) or source_images.ndim != 4:
+                raise ValueError("Cannot determine the silent source-video duration for generated audio alignment.")
+            duration = int(source_images.shape[0]) / float(fps)
+        silence_samples = max(0, int(round(duration * sample_rate)))
+        silence = waveform.new_zeros((waveform.shape[0], waveform.shape[1], silence_samples))
+        return ({"waveform": torch.cat((silence, waveform), dim=2), "sample_rate": sample_rate},)
+
+
 class SwarmInitVideoContinuationSave:
     @classmethod
     def INPUT_TYPES(cls):
@@ -496,11 +584,13 @@ class SwarmInitVideoContinuationSave:
 
 NODE_CLASS_MAPPINGS = {
     "SwarmInitVideoLastFrame": SwarmInitVideoLastFrame,
+    "SwarmInitVideoPrependSourceSilence": SwarmInitVideoPrependSourceSilence,
     "SwarmInitVideoContinuationSave": SwarmInitVideoContinuationSave,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "SwarmInitVideoLastFrame": "Swarm Init Video Last Frame",
+    "SwarmInitVideoPrependSourceSilence": "Swarm Init Video Prepend Source Silence",
     "SwarmInitVideoContinuationSave": "Swarm Init Video Continuation Save",
 }
 

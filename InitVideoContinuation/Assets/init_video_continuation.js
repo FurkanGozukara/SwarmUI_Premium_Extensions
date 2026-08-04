@@ -23,15 +23,23 @@ class InitVideoContinuationUI {
         setMediaFileInput = (elem, file, type) => {
             this.setMediaFileInput(elem, file, type);
         };
+        this.configureInitInput();
         sessionReadyCallbacks.push(() => {
             this.configureInitInput();
         });
+        this.inputObserver = new MutationObserver(() => {
+            this.configureInitInput();
+        });
+        this.inputObserver.observe(document.documentElement, { childList: true, subtree: true });
     }
 
     /** Adds the extra video formats to the Init Image file chooser once that input exists. */
     configureInitInput() {
         let input = document.getElementById('input_initimage');
-        if (!input || input.dataset.initVideoContinuationFormats == 'true') {
+        if (!input) {
+            return;
+        }
+        if (input.dataset.initVideoContinuationFormats == 'true') {
             return;
         }
         let extraExtensions = Object.keys(this.mimeTypes).map(extension => `.${extension}`).join(',');
