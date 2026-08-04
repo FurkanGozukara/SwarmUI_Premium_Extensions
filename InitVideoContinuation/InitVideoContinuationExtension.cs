@@ -36,7 +36,7 @@ public class InitVideoContinuationExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Turns an Init Image video into a simple last-frame continuation and saves the source and generated video as one result.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.0.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/InitVideoContinuation";
     }
 
@@ -121,7 +121,7 @@ public class InitVideoContinuationExtension : Extension
         }
         else
         {
-            ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, lastFrame);
+            ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, frameCount, lastFrame);
             generationImage = processedVideo.WithPath(ClonePath(lastFramePath), WGNodeData.DT_IMAGE);
         }
         ClearVideoMetadata(generationImage, null);
@@ -273,13 +273,14 @@ public class InitVideoContinuationExtension : Extension
         }
     }
 
-    private static void ReplaceNodeConnectionExcept(WorkflowGenerator g, JArray oldNode, JArray newNode, string excludedNodeId)
+    private static void ReplaceNodeConnectionExcept(WorkflowGenerator g, JArray oldNode, JArray newNode, params string[] excludedNodeIds)
     {
         string oldNodeId = $"{oldNode[0]}";
         string oldOutputIndex = $"{oldNode[1]}";
+        HashSet<string> excludedNodes = new(excludedNodeIds);
         foreach (JProperty property in g.Workflow.Properties())
         {
-            if (property.Name == excludedNodeId || property.Value["inputs"] is not JObject inputs)
+            if (excludedNodes.Contains(property.Name) || property.Value["inputs"] is not JObject inputs)
             {
                 continue;
             }
