@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Runtime.CompilerServices;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
@@ -15,21 +16,37 @@ namespace FurkanGozukara.SwarmExtensions.InitVideoContinuation;
 /// <summary>Continues an Init Image video from its last frame and joins the result back onto the source video.</summary>
 public class InitVideoContinuationExtension : Extension
 {
-    private sealed class ContinuationState(WGNodeData originalVideo, double? sourceDuration)
+    private sealed class ContinuationState(WGNodeData originalVideo, double? sourceDuration, JArray sourceVideoPath, string ffmpegPath, bool useStreamingMerge)
     {
         public WGNodeData OriginalVideo = originalVideo;
 
         public double? SourceDuration = sourceDuration;
+
+        public JArray SourceVideoPath = sourceVideoPath;
+
+        public string FFmpegPath = ffmpegPath;
+
+        public bool UseStreamingMerge = useStreamingMerge;
     }
 
+    private const string StreamingFeature = "init_video_continuation_ffmpeg";
     private static readonly ConditionalWeakTable<WorkflowGenerator, ContinuationState> States = new();
     private static readonly HashSet<string> OutputNodeClasses =
     [
         "SaveImage",
+        "SwarmInitVideoContinuationSave",
         "SwarmSaveAnimationWS",
         "SwarmSaveImageWS"
     ];
+    private static readonly HashSet<string> StreamingFormats =
+    [
+        "h264-mp4",
+        "h265-mp4",
+        "webm",
+        "prores"
+    ];
 
+    private static bool _preInitialized;
     private static bool _initialized;
     private static T2IRegisteredParam<bool> ContinueInitVideo;
 
@@ -39,8 +56,24 @@ public class InitVideoContinuationExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Turns an Init Image video into a simple last-frame continuation and saves the source and generated video as one result.";
         License = "MIT";
-        Version = "1.1.0";
+        Version = "1.2.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/InitVideoContinuation";
+    }
+
+    public override void OnPreInit()
+    {
+        if (_preInitialized)
+        {
+            return;
+        }
+        _preInitialized = true;
+
+        string customNodeRoot = Path.GetFullPath(Path.Combine(FilePath, "ComfyNodes"));
+        if (Directory.Exists(customNodeRoot) && !ComfyUISelfStartBackend.CustomNodePaths.Contains(customNodeRoot))
+        {
+            ComfyUISelfStartBackend.CustomNodePaths.Add(customNodeRoot);
+        }
+        ComfyUIBackendExtension.NodeToFeatureMap["SwarmInitVideoContinuationSave"] = StreamingFeature;
     }
 
     public override void OnInit()
@@ -99,24 +132,48 @@ public class InitVideoContinuationExtension : Extension
             originalVideoPath = ClonePath((JArray)processedInputs["image"]);
         }
         WGNodeData originalVideo = processedVideo.WithPath(originalVideoPath, WGNodeData.DT_VIDEO);
-        States.Remove(g);
-        States.Add(g, new ContinuationState(originalVideo, GetSourceDuration(g)));
 
-        string frameCount = g.CreateNode("SwarmCountFrames", new JObject()
+        JArray sourceVideoPath = FindSourceVideoPath(g, originalVideoPath);
+        string outputFormat = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4");
+        bool streamingSettingsSupported = StreamingFormats.Contains(outputFormat)
+            && !g.UserInput.Get(T2IParamTypes.VideoBoomerang, false);
+        string ffmpegPath = streamingSettingsSupported ? GetFFmpegPath() : null;
+        bool useStreamingMerge = sourceVideoPath is not null
+            && ffmpegPath is not null
+            && !WorkflowGenerator.RestrictCustomNodes
+            && g.Features.Contains(StreamingFeature)
+            && streamingSettingsSupported;
+
+        States.Remove(g);
+        States.Add(g, new ContinuationState(originalVideo, GetSourceDuration(g), sourceVideoPath, ffmpegPath, useStreamingMerge));
+
+        string lastFrame;
+        string frameCount = null;
+        if (useStreamingMerge)
         {
-            ["image"] = ClonePath(originalVideoPath)
-        });
-        string lastFrameIndex = g.CreateNode("SwarmIntAdd", new JObject()
+            lastFrame = g.CreateNode("SwarmInitVideoLastFrame", new JObject()
+            {
+                ["video"] = ClonePath(sourceVideoPath)
+            });
+        }
+        else
         {
-            ["a"] = WorkflowGenerator.NodePath(frameCount, 0),
-            ["b"] = -1
-        });
-        string lastFrame = g.CreateNode("ImageFromBatch", new JObject()
-        {
-            ["image"] = ClonePath(originalVideoPath),
-            ["batch_index"] = WorkflowGenerator.NodePath(lastFrameIndex, 0),
-            ["length"] = 1
-        });
+            frameCount = g.CreateNode("SwarmCountFrames", new JObject()
+            {
+                ["image"] = ClonePath(originalVideoPath)
+            });
+            string lastFrameIndex = g.CreateNode("SwarmIntAdd", new JObject()
+            {
+                ["a"] = WorkflowGenerator.NodePath(frameCount, 0),
+                ["b"] = -1
+            });
+            lastFrame = g.CreateNode("ImageFromBatch", new JObject()
+            {
+                ["image"] = ClonePath(originalVideoPath),
+                ["batch_index"] = WorkflowGenerator.NodePath(lastFrameIndex, 0),
+                ["length"] = 1
+            });
+        }
         JArray lastFramePath = WorkflowGenerator.NodePath(lastFrame, 0);
 
         WGNodeData generationImage;
@@ -127,7 +184,14 @@ public class InitVideoContinuationExtension : Extension
         }
         else
         {
-            ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, frameCount, lastFrame);
+            if (useStreamingMerge)
+            {
+                ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, lastFrame);
+            }
+            else
+            {
+                ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, frameCount, lastFrame);
+            }
             generationImage = processedVideo.WithPath(ClonePath(lastFramePath), WGNodeData.DT_IMAGE);
         }
         ClearVideoMetadata(generationImage, null);
@@ -147,7 +211,9 @@ public class InitVideoContinuationExtension : Extension
             g.UserInput.Remove(T2IParamTypes.Video2VideoCreativity);
             Logs.Info("Ignored Video2Video Creativity because Init Video Continuation intentionally uses only the source video's last frame.");
         }
-        Logs.Info("Prepared the Init Image video's last frame as a still image for video continuation.");
+        Logs.Info(useStreamingMerge
+            ? "Prepared the Init Image video's last frame with the streaming continuation path."
+            : "Prepared the Init Image video's last frame with SwarmUI's frame-batch fallback path.");
     }
 
     private static void MergeFinalVideo(WorkflowGenerator g)
@@ -162,6 +228,12 @@ public class InitVideoContinuationExtension : Extension
             if (generatedVideo is null || generatedVideo.DataType != WGNodeData.DT_VIDEO)
             {
                 throw new SwarmUserErrorException("Continue Init Video From Last Frame did not receive a generated video to append. Check the selected video model and video settings.");
+            }
+
+            if (state.UseStreamingMerge)
+            {
+                SaveStreamingContinuation(g, state, generatedVideo);
+                return;
             }
 
             JToken outputFps = generatedVideo.FPS?.DeepClone() ?? new JValue(g.Text2VideoFPS());
@@ -225,6 +297,29 @@ public class InitVideoContinuationExtension : Extension
         {
             States.Remove(g);
         }
+    }
+
+    private static void SaveStreamingContinuation(WorkflowGenerator g, ContinuationState state, WGNodeData generatedVideo)
+    {
+        WGNodeData generatedAudio = DecodeAudio(g, generatedVideo.AttachedAudio);
+        JObject inputs = new()
+        {
+            ["source_video"] = ClonePath(state.SourceVideoPath),
+            ["generated_images"] = ClonePath(generatedVideo.Path),
+            ["fps"] = generatedVideo.FPS?.DeepClone() ?? new JValue(g.Text2VideoFPS()),
+            ["format"] = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4"),
+            ["ffmpeg_path"] = state.FFmpegPath,
+            ["source_duration_hint"] = state.SourceDuration ?? 0
+        };
+        if (generatedAudio is not null)
+        {
+            inputs["generated_audio"] = ClonePath(generatedAudio.Path);
+        }
+
+        RemoveAutomaticOutput(g, "9");
+        RemoveAutomaticOutput(g, "30");
+        g.CreateNode("SwarmInitVideoContinuationSave", inputs, "9");
+        Logs.Info("Streaming merge will append generated frames 1 through the end with FFmpeg; generated frame 0 is skipped to prevent a duplicate boundary frame.");
     }
 
     private static WGNodeData AppendAudio(WorkflowGenerator g, WGNodeData sourceAudio, WGNodeData generatedAudio, double? sourceDuration)
@@ -305,6 +400,63 @@ public class InitVideoContinuationExtension : Extension
         MediaType.Register(new("flv", "video/x-flv", MediaMetaType.Video));
         MediaType.Register(new("ogv", "video/ogg", MediaMetaType.Video));
         MediaType.Register(new("3gp", "video/3gpp", MediaMetaType.Video));
+    }
+
+    private static string GetFFmpegPath()
+    {
+        string ffmpegPath = Utilities.FfmegLocation.Value;
+        if (string.IsNullOrWhiteSpace(ffmpegPath) || ffmpegPath == "ffmpeg")
+        {
+            return ffmpegPath;
+        }
+        try
+        {
+            return Path.GetFullPath(ffmpegPath);
+        }
+        catch (Exception)
+        {
+            return ffmpegPath;
+        }
+    }
+
+    private static JArray FindSourceVideoPath(WorkflowGenerator g, JArray path)
+    {
+        return FindSourceVideoPath(g, path, [], 0);
+    }
+
+    private static JArray FindSourceVideoPath(WorkflowGenerator g, JArray path, HashSet<string> visited, int depth)
+    {
+        if (path is null || path.Count != 2 || depth > 16)
+        {
+            return null;
+        }
+        string nodeId = $"{path[0]}";
+        if (!visited.Add(nodeId)
+            || !g.Workflow.TryGetValue(nodeId, out JToken token)
+            || token is not JObject node)
+        {
+            return null;
+        }
+        if ($"{node["class_type"]}" == "SwarmLoadVideoB64")
+        {
+            return ClonePath(path);
+        }
+        if (node["inputs"] is not JObject inputs)
+        {
+            return null;
+        }
+        foreach (string inputName in new[] { "video", "image", "images" })
+        {
+            if (inputs[inputName] is JArray inputPath)
+            {
+                JArray result = FindSourceVideoPath(g, inputPath, visited, depth + 1);
+                if (result is not null)
+                {
+                    return result;
+                }
+            }
+        }
+        return null;
     }
 
     private static void ClearVideoMetadata(WGNodeData media, WGNodeData attachedAudio)

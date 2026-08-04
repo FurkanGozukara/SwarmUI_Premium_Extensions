@@ -25,6 +25,12 @@ duration. Existing input audio is kept; model-generated audio is appended when
 the selected workflow produces it. When browser duration metadata is available,
 the input track is padded or trimmed to the source-video boundary first.
 
+For MP4, WebM, and ProRes output, the extension uses a bundled ComfyUI node to
+stream the source through FFmpeg. Only the extracted last frame and the model's
+newly generated frame batch need to be materialized as tensors. Source audio is
+kept at the beginning, generated audio starts at the continuation boundary, and
+silence is inserted on either side when just one segment has audio.
+
 ## Video compatibility
 
 The file chooser supports MP4, WebM, MOV, M4V, MKV, AVI, MPEG/MPG, TS/M2TS/MTS,
@@ -38,10 +44,16 @@ H.264 video, yuv420p pixel format, and AAC audio. Variable-frame-rate, HDR,
 unusual chroma formats, damaged files, or codecs missing from the backend may
 fail or produce timing or color differences.
 
-The complete source video and generated video are decoded into frame batches
-for scaling, FPS conversion, and joining. Very long, high-resolution, or
-high-frame-rate sources therefore require substantial system RAM and GPU memory;
-short continuation clips are the intended use case.
+FFmpeg must be available in `PATH` or through SwarmUI's bundled ComfyUI
+installation for the streaming path. If FFmpeg is unavailable, the backend did
+not load the bundled node, **Video Boomerang** is enabled, or the output is WebP
+or GIF, the extension automatically uses its original frame-batch merge. That
+fallback decodes the complete source and generated videos into tensors and can
+use substantial RAM or VRAM for long, high-resolution, or high-frame-rate clips.
+
+The upload itself is still sent to ComfyUI as base64 data, so the compressed
+source file occupies normal upload memory even on the streaming path. The large
+decoded source-frame tensor is what the FFmpeg path avoids.
 
 The checkbox intentionally ignores **Video2Video Creativity**. Continuation is
 image-to-video from one extracted frame, not video-to-video over the complete
