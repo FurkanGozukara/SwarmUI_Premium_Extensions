@@ -18,14 +18,20 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<string> ReferenceImageSize;
     private static List<T2IRegisteredParam<VideoFile>> ReferenceVideos = [];
     private static List<T2IRegisteredParam<AudioFile>> ReferenceAudios = [];
+    private static T2IRegisteredParam<bool> SpeedOptimize;
+    private static T2IRegisteredParam<double> SpeedCacheThreshold;
+    private static T2IRegisteredParam<string> SpeedSparseAttention;
+
+    /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3SpeedOptimizer node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
+    public const string SpeedFeatureId = "minimax_h3_speed";
 
     /// <summary>This extension is installed by the SECourses updater rather than a git clone, so metadata is set directly instead of read from git.</summary>
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow and a unified prompt uploader for up to nine images, three videos, and three audio files, with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete.";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
         License = "MIT";
-        Version = "1.3.0";
+        Version = "1.4.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -40,14 +46,34 @@ public class MiniMaxH3ReferencesExtension : Extension
 
         ScriptFiles.Add("Assets/minimax_h3_prompt_references.js");
         StyleSheetFiles.Add("Assets/minimax_h3_prompt_references.css");
+        // Advertise the speed feature only when the backend actually has the optimizer node.
+        ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3SpeedOptimizer"] = SpeedFeatureId;
         RegisterParameters();
         WorkflowGenerator.AddStep(ApplyReferences, -7.9);
+        WorkflowGenerator.AddModelGenStep(ApplySpeedOptimizations, -3.5);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
     }
 
     private static void RegisterParameters()
     {
+        SpeedOptimize = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 4x Speed",
+            "Enable the NVlabs Sana sol-engine MiniMax H3 speed optimizations: FirstBlockCache step skipping, Sol-Attn sparse attention, and batched VAE tile decoding.\nEach technique is verified on your GPU at runtime and anything that does not work or does not win there falls back to the normal path automatically, so this is safe to leave enabled on any GPU (RTX 30xx and newer).\nExpect roughly 2x-4x faster video generation with a small quality tradeoff from the cache and sparse attention.",
+            "false", IgnoreIf: "false", FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupCore,
+            OrderPriority: -17, ChangeWeight: 2));
+        SpeedCacheThreshold = T2IParamTypes.Register<double>(new(
+            "MiniMax H3 Speed Cache Threshold",
+            "FirstBlockCache skip threshold for the MiniMax H3 4x Speed parameter.\n0.08 is the NVlabs sol-engine advertised near-lossless policy.\nHigher skips more aggressively (faster, lower quality), eg 0.15-0.20 for maximum speed.",
+            "0.08", Min: 0, Max: 1, Step: 0.01, ViewMax: 0.5, Toggleable: true,
+            FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupCore, OrderPriority: -16.9,
+            DependNonDefault: SpeedOptimize.Type.ID));
+        SpeedSparseAttention = T2IParamTypes.Register<string>(new(
+            "MiniMax H3 Speed Sparse Attention",
+            "Sol-Attn sparse attention mode for the MiniMax H3 4x Speed parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
+            "auto", GetValues: _ => ["auto", "enabled", "disabled"], IsAdvanced: true,
+            FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 16.5));
+
         T2IParamGroup group = new("MiniMax H3 References", Open: true, OrderPriority: 8,
             Description: "Add every image, video, and audio reference directly beside the main prompt. Video soundtracks are paired automatically. Type '@' in the prompt to reference attachments, eg '@image1' or '@video2' (legacy '<Picture 1>' labels still work).");
         Enabled = T2IParamTypes.Register<bool>(new(
@@ -90,6 +116,49 @@ public class MiniMaxH3ReferencesExtension : Extension
                 null, FeatureFlag: "comfyui", Group: group, OrderPriority: priority,
                 DependNonDefault: Enabled.Type.ID, DoNotPreview: true));
         }
+    }
+
+    /// <summary>Model-gen step: wrap the loaded MiniMax H3 model (and video VAE) with the sol-engine speed nodes.</summary>
+    private static void ApplySpeedOptimizations(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(SpeedOptimize, false) || !g.IsMiniMaxH3())
+        {
+            return;
+        }
+        if (!g.Features.Contains(SpeedFeatureId))
+        {
+            Logs.Warning("MiniMax H3 4x Speed was requested but the backend does not have the MiniMaxH3SpeedOptimizer node. Update the ComfyUI-TeaCache node package.");
+            return;
+        }
+        double threshold = g.UserInput.Get(SpeedCacheThreshold, 0.08);
+        string sparse = g.UserInput.Get(SpeedSparseAttention, "auto");
+        string optimizer = g.CreateNode("MiniMaxH3SpeedOptimizer", new JObject()
+        {
+            ["model"] = g.LoadingModel,
+            ["first_block_cache"] = true,
+            ["fbc_threshold"] = threshold,
+            ["fbc_start_percent"] = 0.15,
+            ["fbc_end_percent"] = 0.95,
+            ["fbc_max_consecutive"] = 3,
+            ["sparse_attention"] = sparse,
+            ["sparse_dense_steps_pct"] = 0.20,
+            ["sparse_dense_layers"] = 2,
+            ["sparse_tau"] = 1.0,
+            ["sparse_min_video_rows"] = 4096,
+            ["fbc_cache_device"] = "gpu",
+            ["verbose"] = true
+        });
+        g.LoadingModel = [optimizer, 0];
+        if (g.LoadingVAE is not null)
+        {
+            string vaeSpeed = g.CreateNode("MiniMaxH3VAESpeedup", new JObject()
+            {
+                ["vae"] = g.LoadingVAE,
+                ["tile_batch_size"] = 0
+            });
+            g.LoadingVAE = [vaeSpeed, 0];
+        }
+        Logs.Info($"MiniMax H3 4x Speed enabled (cache threshold {threshold}, sparse attention {sparse}).");
     }
 
     private static void ApplyReferences(WorkflowGenerator g)

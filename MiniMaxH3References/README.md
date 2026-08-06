@@ -3,6 +3,29 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## MiniMax H3 4x Speed (Core Parameters checkbox)
+
+Since v1.4.0 the extension also adds a **MiniMax H3 4x Speed** checkbox to SwarmUI's Core
+Parameters. It appears only while a MiniMax H3 architecture model is selected *and* the
+ComfyUI backend has the `MiniMaxH3SpeedOptimizer` node (shipped by
+[FurkanGozukara/ComfyUI-TeaCache](https://github.com/FurkanGozukara/ComfyUI-TeaCache)).
+
+Enabling it wraps the loaded model and video VAE with the NVlabs Sana `sol-engine`
+acceleration line: FirstBlockCache step skipping, Sol-Attn sparse attention over the packed
+audio-video sequence, and batched VAE tile decoding. Every technique is verified on the
+active GPU at runtime — the sparse kernel is compiled, correctness-gated against dense
+attention on the model's own tensors, and micro-benchmarked against the incumbent attention
+backend — so whatever does not work or does not win on that specific GPU falls back to the
+normal path automatically. RTX 30xx and newer are supported (Triton backend everywhere,
+CuTe DSL on SM90/SM100/SM120 where installed).
+
+Two advanced parameters tune it under *Advanced Sampling*: **MiniMax H3 Speed Cache
+Threshold** (default 0.08, the NVlabs-advertised near-lossless policy; higher skips more
+aggressively) and **MiniMax H3 Speed Sparse
+Attention** (`auto` / `enabled` / `disabled`).
+
+## Reference uploader
+
 It exposes the model's complete dynamic reference limits in SwarmUI:
 
 - One prompt-adjacent uploader for images, videos, and audio
