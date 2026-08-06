@@ -32,7 +32,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
         License = "MIT";
-        Version = "1.5.0";
+        Version = "1.5.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 

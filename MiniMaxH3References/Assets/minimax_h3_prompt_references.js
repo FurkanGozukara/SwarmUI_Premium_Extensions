@@ -53,6 +53,54 @@ class MiniMaxH3PromptReferences {
         this.overlayActive = false;
         this.suggestPopover = null;
         this.dragContext = null;
+        this.syncQueued = false;
+    }
+
+    /** Schedules a single syncAll on the next frame, coalescing bursts of DOM changes. */
+    scheduleSync() {
+        if (this.syncQueued) {
+            return;
+        }
+        this.syncQueued = true;
+        requestAnimationFrame(() => {
+            this.syncQueued = false;
+            this.syncAll();
+        });
+    }
+
+    /** Revokes blob preview URLs of removed reference cards so they don't leak. */
+    releaseRemovedPreviews(mutations) {
+        for (let mutation of mutations) {
+            for (let node of mutation.removedNodes) {
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                    continue;
+                }
+                for (let media of node.querySelectorAll('img, video, audio')) {
+                    if (media.src && media.src.startsWith('blob:')) {
+                        URL.revokeObjectURL(media.src);
+                    }
+                }
+            }
+        }
+    }
+
+    /** Builds a small thumbnail blob URL so cards never carry a full-resolution decode.
+     * Returns null when the image cannot be decoded (caller falls back to the data URL). */
+    async makeImageThumbnail(file, maxEdge = 384) {
+        try {
+            const bitmap = await createImageBitmap(file);
+            const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+            const canvas = document.createElement('canvas');
+            canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+            canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+            canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+            bitmap.close();
+            return await new Promise(resolve => canvas.toBlob(
+                blob => resolve(blob ? URL.createObjectURL(blob) : null), 'image/jpeg', 0.85));
+        }
+        catch (error) {
+            return null;
+        }
     }
 
     register() {
@@ -75,7 +123,10 @@ class MiniMaxH3PromptReferences {
         this.createToolbar();
         this.createOverlay();
         this.bindEvents();
-        this.observer = new MutationObserver(() => this.syncAll());
+        this.observer = new MutationObserver(mutations => {
+            this.releaseRemovedPreviews(mutations);
+            this.scheduleSync();
+        });
         this.observer.observe(this.referenceArea, { childList: true });
         this.enabledInput?.addEventListener('change', () => this.updateActiveState());
         this.modelInput?.addEventListener('change', () => this.handleModelChange());
@@ -319,10 +370,14 @@ class MiniMaxH3PromptReferences {
             }
             let data = await this.readFile(file);
             if (type === 'image') {
-                this.addImage(data, file.name);
+                // A small thumbnail keeps the card (and its drag ghost, and every
+                // DOM move) light; the full-resolution data URL only lives in
+                // dataset.filedata for the generation request.
+                let preview = await this.makeImageThumbnail(file);
+                this.addImage(data, file.name, preview);
             }
             else {
-                this.addMedia(data, file.name, type);
+                this.addMedia(data, file.name, type, URL.createObjectURL(file));
             }
         }
         this.syncAll();
@@ -340,7 +395,7 @@ class MiniMaxH3PromptReferences {
         });
     }
 
-    addImage(data, filename) {
+    addImage(data, filename, preview = null) {
         let container = document.createElement('div');
         container.className = 'alt-prompt-image-container';
         container.dataset.filename = filename;
@@ -356,7 +411,7 @@ class MiniMaxH3PromptReferences {
         });
 
         let image = new Image();
-        image.src = data;
+        image.src = preview || data;
         image.height = 128;
         image.className = 'alt-prompt-image';
         image.dataset.filedata = data;
@@ -367,7 +422,7 @@ class MiniMaxH3PromptReferences {
         showRevisionInputs(true);
     }
 
-    addMedia(data, filename, type) {
+    addMedia(data, filename, type, preview = null) {
         let container = document.createElement('div');
         container.className = 'minimax-h3-prompt-reference';
         container.dataset.referenceType = type;
@@ -386,7 +441,7 @@ class MiniMaxH3PromptReferences {
 
         let media = document.createElement(type);
         media.className = 'minimax-h3-prompt-reference-preview';
-        media.src = data;
+        media.src = preview || data;
         media.controls = true;
         media.preload = 'metadata';
         if (type === 'video') {
@@ -629,8 +684,7 @@ class MiniMaxH3PromptReferences {
         else if (peers.length) {
             peers[peers.length - 1].after(dragged);
         }
-        this.syncAll();
-        autoRevealRevision();
+        // The childList MutationObserver schedules the (coalesced) resync.
     }
 
     // ==================== Prompt pill overlay ====================
@@ -898,11 +952,17 @@ class MiniMaxH3PromptReferences {
             }
             let reference = references[index];
             if (reference) {
-                input.dataset.filedata = reference.dataset.filedata;
-                input.dataset.filename = reference.dataset.filename;
+                // The file payloads are multi-megabyte base64 strings; only touch
+                // the attribute when the slot actually changes.
+                if (input.dataset.filedata !== reference.dataset.filedata) {
+                    input.dataset.filedata = reference.dataset.filedata;
+                }
+                if (input.dataset.filename !== reference.dataset.filename) {
+                    input.dataset.filename = reference.dataset.filename;
+                }
                 input.dataset.has_data = 'true';
             }
-            else {
+            else if (input.dataset.has_data) {
                 delete input.dataset.filedata;
                 delete input.dataset.filename;
                 delete input.dataset.duration;
@@ -912,7 +972,7 @@ class MiniMaxH3PromptReferences {
             }
             let parent = findParentOfClass(input, 'auto-input');
             let label = parent?.querySelector('.auto-file-input-filename');
-            if (label) {
+            if (label && label.textContent !== (reference?.dataset.filename || '')) {
                 label.textContent = reference?.dataset.filename || '';
             }
         });
