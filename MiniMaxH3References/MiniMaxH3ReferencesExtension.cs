@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Builtin_ComfyUIBackend;
@@ -31,7 +32,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
         License = "MIT";
-        Version = "1.4.0";
+        Version = "1.5.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -304,7 +305,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     /// "&lt;Picture 1&gt;" / "&lt;Video 2&gt;" / "&lt;Audio n&gt;" labels the MiniMax H3 node expects.
     /// Audio labels index video soundtracks first, so standalone audio tokens are offset by the
     /// video count (and by the legacy audio reference, when present). Legacy labels typed directly
-    /// in the prompt pass through unchanged.
+    /// in the prompt pass through unchanged. Tokens that point at a missing reference (eg '@image3'
+    /// with two images attached) are silently omitted, together with one adjacent space, so a stale
+    /// token left in the prompt never blocks generation.
     /// </summary>
     public static string TranslatePromptReferenceTokens(string prompt, int imageCount, int videoCount, int standaloneAudioCount, int audioLabelOffset)
     {
@@ -312,26 +315,42 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             return prompt;
         }
-        return PromptReferenceTokenMatcher.Replace(prompt, match =>
+        StringBuilder result = new(prompt.Length);
+        List<string> omitted = [];
+        int last = 0;
+        foreach (Match match in PromptReferenceTokenMatcher.Matches(prompt))
         {
+            result.Append(prompt, last, match.Index - last);
+            last = match.Index + match.Length;
             string type = match.Groups["type"].Value.ToLowerInvariant();
             int number = int.Parse(match.Groups["num"].Value);
-            (string label, string noun, int count, int offset) = type switch
+            (string label, int count, int offset) = type switch
             {
-                "image" or "img" or "picture" or "pic" => ("Picture", "image", imageCount, 0),
-                "video" or "vid" => ("Video", "video", videoCount, 0),
-                _ => ("Audio", "audio", standaloneAudioCount, audioLabelOffset),
+                "image" or "img" or "picture" or "pic" => ("Picture", imageCount, 0),
+                "video" or "vid" => ("Video", videoCount, 0),
+                _ => ("Audio", standaloneAudioCount, audioLabelOffset),
             };
-            if (number < 1)
+            if (number >= 1 && number <= count)
             {
-                throw new SwarmUserErrorException($"The prompt reference '{match.Value}' is invalid: reference numbering starts at 1, eg '@{noun}1'.");
+                result.Append($"<{label} {offset + number}>");
+                continue;
             }
-            if (number > count)
+            omitted.Add(match.Value);
+            if (last < prompt.Length && prompt[last] == ' ')
             {
-                throw new SwarmUserErrorException($"The prompt references '{match.Value}' but only {count} {noun} reference{(count == 1 ? " is" : "s are")} attached.");
+                last++;
             }
-            return $"<{label} {offset + number}>";
-        });
+            else if (result.Length > 0 && result[^1] == ' ')
+            {
+                result.Length--;
+            }
+        }
+        result.Append(prompt, last, prompt.Length - last);
+        if (omitted.Count > 0)
+        {
+            Logs.Info($"MiniMax H3 References is ignoring prompt reference token(s) with no matching attachment: {string.Join(", ", omitted)}");
+        }
+        return result.ToString();
     }
 
     /// <summary>

@@ -26,6 +26,14 @@ for (let type in MiniMaxH3ReferenceTypes) {
     }
 }
 
+/** HTML-escape for the white-space:pre-wrap prompt overlay. SwarmUI's global escapeHtml()
+ * keeps '\n' AND appends '<br>', which doubles every line break under pre-wrap and shifts
+ * the mirrored text further down than the real textarea line by line. */
+function minimaxH3EscapeText(text) {
+    return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
+}
+
 class MiniMaxH3PromptReferences {
     constructor() {
         this.maxImages = 9;
@@ -44,7 +52,7 @@ class MiniMaxH3PromptReferences {
         this.overlay = null;
         this.overlayActive = false;
         this.suggestPopover = null;
-        this.lastKnown = null;
+        this.dragContext = null;
     }
 
     register() {
@@ -147,6 +155,31 @@ class MiniMaxH3PromptReferences {
             event.stopImmediatePropagation();
             this.region.classList.remove('minimax-h3-prompt-reference-dragging');
             await this.addFiles(files);
+        }, true);
+
+        // Internal card reordering. These run in the capture phase on the
+        // reference area itself; file drags never reach them with a drag
+        // context, and internal drags carry no files so the handlers above
+        // (and SwarmUI's own image-drop logic) ignore them.
+        this.referenceArea.addEventListener('dragover', (event) => {
+            if (!this.dragContext) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            event.dataTransfer.dropEffect = 'move';
+            this.updateDropMarker(this.reorderInsertPos(event));
+        }, true);
+        this.referenceArea.addEventListener('drop', (event) => {
+            if (!this.dragContext) {
+                return;
+            }
+            event.preventDefault();
+            event.stopImmediatePropagation();
+            let insertPos = this.reorderInsertPos(event);
+            this.clearDropMarkers();
+            this.applyReorder(insertPos);
+            this.dragContext = null;
         }, true);
 
         // The prompt box's inline onpaste handler runs before any listener added here can
@@ -432,39 +465,17 @@ class MiniMaxH3PromptReferences {
         if (!this.referenceArea || !this.status) {
             return;
         }
+        // The prompt text is never modified when references are removed or
+        // reordered: tokens renumber visually by position, and any token left
+        // pointing past the attachment list is shown as inactive and omitted
+        // at generation time by the backend instead of erroring.
         let current = this.collectReferences();
-        if (this.lastKnown && this.isActive()) {
-            // Only a single-card removal renumbers and cleans prompt tokens. Bulk removals
-            // (eg 'Clear references') leave the prompt text untouched, so a rebuilt
-            // reference list can pick the old tokens right back up.
-            let removedTotal = 0;
-            for (let type of ['image', 'video', 'audio']) {
-                removedTotal += Math.max(0, this.lastKnown[type].length - current[type].length);
-            }
-            if (removedTotal === 1) {
-                for (let type of ['image', 'video', 'audio']) {
-                    let old = this.lastKnown[type];
-                    let now = current[type];
-                    if (old.length - now.length === 1) {
-                        let mapping = {};
-                        old.forEach((elem, index) => {
-                            let newIndex = now.indexOf(elem);
-                            if (newIndex !== -1) {
-                                mapping[index + 1] = newIndex + 1;
-                            }
-                        });
-                        this.renumberTokensAfterRemoval(type, mapping);
-                    }
-                }
-            }
-        }
-        this.lastKnown = current;
-
         current.image.forEach((container, index) => {
             let n = index + 1;
             container.dataset.referenceLabel = this.tokenFor('image', n);
             container.style.setProperty('--minimax-ref-color', this.colorFor('image', n));
             this.bindCardInsert(container, 'image');
+            this.bindCardDrag(container, 'image');
         });
         for (let type of ['video', 'audio']) {
             current[type].forEach((container, index) => {
@@ -475,6 +486,7 @@ class MiniMaxH3PromptReferences {
                 }
                 container.style.setProperty('--minimax-ref-color', this.colorFor(type, n));
                 this.bindCardInsert(container, type);
+                this.bindCardDrag(container, type);
             });
         }
         this.syncSlots(current.video, this.videoInputIds);
@@ -512,7 +524,7 @@ class MiniMaxH3PromptReferences {
             this.insertToken(type, n);
         });
         if (!container.title) {
-            container.title = 'Click to insert this reference into the prompt';
+            container.title = 'Click to insert this reference into the prompt. Drag left/right to reorder; tokens renumber by position.';
         }
     }
 
@@ -538,37 +550,87 @@ class MiniMaxH3PromptReferences {
         box.dispatchEvent(new Event('input'));
     }
 
-    /** After a single reference was removed: renumber surviving tokens, drop tokens for the removed one. */
-    renumberTokensAfterRemoval(type, mapping) {
-        let box = this.promptBox;
-        let original = box.value;
-        let aliases = MiniMaxH3ReferenceTypes[type].aliases.join('|');
-        let tokenRegex = new RegExp(`(?<![\\w@])@(?:${aliases})#?(\\d{1,2})(?![0-9a-zA-Z]) ?`, 'gi');
-        let updated = original.replace(tokenRegex, (match, num) => {
-            let n = parseInt(num);
-            let trailing = match.endsWith(' ') ? ' ' : '';
-            if (mapping[n]) {
-                return `@${type}${mapping[n]}${trailing}`;
+    // ==================== Card drag & drop reordering ====================
+
+    /** Attaches (once) drag-to-reorder behavior to a reference card. */
+    bindCardDrag(container, type) {
+        if (container.dataset.minimaxDragBound) {
+            return;
+        }
+        container.dataset.minimaxDragBound = 'true';
+        container.draggable = true;
+        container.addEventListener('dragstart', (event) => {
+            if (!this.isActive()) {
+                return;
             }
-            return '';
+            this.dragContext = { container: container, type: type };
+            event.dataTransfer.effectAllowed = 'move';
+            event.dataTransfer.setData('application/x-minimax-h3-reference', type);
+            container.classList.add('minimax-h3-reference-dragging');
         });
-        if (type !== 'audio') {
-            // Legacy audio labels are offset by the video count, so only image/video legacy labels renumber safely.
-            let label = MiniMaxH3ReferenceTypes[type].label;
-            let legacyRegex = new RegExp(`<${label}[ ]?(\\d{1,2})> ?`, 'gi');
-            updated = updated.replace(legacyRegex, (match, num) => {
-                let n = parseInt(num);
-                let trailing = match.endsWith(' ') ? ' ' : '';
-                if (mapping[n]) {
-                    return `<${label} ${mapping[n]}>${trailing}`;
-                }
-                return '';
-            });
+        container.addEventListener('dragend', () => {
+            this.dragContext = null;
+            this.clearDropMarkers();
+            container.classList.remove('minimax-h3-reference-dragging');
+        });
+        for (let media of container.querySelectorAll('img, video, audio')) {
+            media.draggable = false;
         }
-        if (updated !== original) {
-            box.value = updated;
-            box.dispatchEvent(new Event('input'));
+    }
+
+    /** Containers of the same type as the current drag, in display order. */
+    reorderPeers() {
+        return this.collectReferences()[this.dragContext.type];
+    }
+
+    /** Insertion slot [0..n] among same-type containers for the pointer position. */
+    reorderInsertPos(event) {
+        let pos = 0;
+        for (let container of this.reorderPeers()) {
+            let rect = container.getBoundingClientRect();
+            if (event.clientY > rect.bottom || (event.clientY >= rect.top && event.clientX > rect.left + rect.width / 2)) {
+                pos++;
+            }
         }
+        return pos;
+    }
+
+    updateDropMarker(insertPos) {
+        this.clearDropMarkers();
+        let peers = this.reorderPeers();
+        if (!peers.length) {
+            return;
+        }
+        if (insertPos < peers.length) {
+            peers[insertPos].classList.add('minimax-h3-reference-drop-before');
+        }
+        else {
+            peers[peers.length - 1].classList.add('minimax-h3-reference-drop-after');
+        }
+    }
+
+    clearDropMarkers() {
+        for (let elem of this.referenceArea.querySelectorAll('.minimax-h3-reference-drop-before, .minimax-h3-reference-drop-after')) {
+            elem.classList.remove('minimax-h3-reference-drop-before', 'minimax-h3-reference-drop-after');
+        }
+    }
+
+    /** Moves the dragged card so it sits at the given slot among cards of its type. */
+    applyReorder(insertPos) {
+        let dragged = this.dragContext.container;
+        let peers = this.reorderPeers().filter(container => container !== dragged);
+        if (insertPos > this.reorderPeers().indexOf(dragged)) {
+            insertPos--;
+        }
+        insertPos = Math.max(0, Math.min(peers.length, insertPos));
+        if (insertPos < peers.length) {
+            this.referenceArea.insertBefore(dragged, peers[insertPos]);
+        }
+        else if (peers.length) {
+            peers[peers.length - 1].after(dragged);
+        }
+        this.syncAll();
+        autoRevealRevision();
     }
 
     // ==================== Prompt pill overlay ====================
@@ -579,7 +641,16 @@ class MiniMaxH3PromptReferences {
         this.overlay.className = 'minimax-h3-prompt-highlight';
         this.overlay.setAttribute('aria-hidden', 'true');
         this.overlay.style.display = 'none';
+        // The text lives in an inner element that is moved with a transform to
+        // mirror the textarea's scroll position. Unlike scrollTop, a transform
+        // never clamps, so the overlay can never end up scrolled out of sync
+        // while SwarmUI's auto-size logic is mid-flight.
+        this.overlayInner = document.createElement('div');
+        this.overlayInner.className = 'minimax-h3-prompt-highlight-inner';
+        this.overlay.appendChild(this.overlayInner);
         this.promptBox.parentElement.appendChild(this.overlay);
+        document.fonts?.ready?.then(() => this.renderOverlay());
+        window.addEventListener('resize', () => this.renderOverlay());
     }
 
     setOverlayActive(active) {
@@ -596,23 +667,28 @@ class MiniMaxH3PromptReferences {
         if (!this.overlayActive) {
             return;
         }
-        this.overlay.scrollTop = this.promptBox.scrollTop;
-        this.overlay.scrollLeft = this.promptBox.scrollLeft;
+        this.overlayInner.style.transform = `translate(${-this.promptBox.scrollLeft}px, ${-this.promptBox.scrollTop}px)`;
     }
 
     /** Mirrors the textarea's exact text metrics and geometry onto the overlay. */
     syncOverlayMetrics() {
         let box = this.promptBox;
-        let overlay = this.overlay;
+        let inner = this.overlayInner;
         let cs = getComputedStyle(box);
+        // Every property that can influence glyph metrics or line wrapping must
+        // match the textarea exactly, or the overlay's text drifts away from
+        // the real (invisible) text and the caret appears misplaced.
         for (let prop of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'fontVariant', 'fontStretch', 'fontKerning',
-            'letterSpacing', 'wordSpacing', 'lineHeight', 'textTransform', 'textIndent', 'tabSize', 'direction', 'textAlign']) {
-            overlay.style[prop] = cs[prop];
+            'fontFeatureSettings', 'fontVariantLigatures', 'fontVariantNumeric', 'fontVariantCaps', 'fontVariantEastAsian',
+            'fontOpticalSizing', 'fontSizeAdjust', 'letterSpacing', 'wordSpacing', 'lineHeight', 'textTransform',
+            'textIndent', 'textRendering', 'tabSize', 'direction', 'textAlign', 'whiteSpace', 'overflowWrap',
+            'wordBreak', 'hyphens', 'unicodeBidi', 'writingMode', 'textOrientation']) {
+            inner.style[prop] = cs[prop];
         }
-        overlay.style.paddingTop = cs.paddingTop;
-        overlay.style.paddingRight = cs.paddingRight;
-        overlay.style.paddingBottom = cs.paddingBottom;
-        overlay.style.paddingLeft = cs.paddingLeft;
+        inner.style.paddingTop = cs.paddingTop;
+        inner.style.paddingRight = cs.paddingRight;
+        inner.style.paddingBottom = cs.paddingBottom;
+        inner.style.paddingLeft = cs.paddingLeft;
         let host = box.parentElement;
         let hostRect = host.getBoundingClientRect();
         let rect = box.getBoundingClientRect();
@@ -620,14 +696,16 @@ class MiniMaxH3PromptReferences {
         let borderRight = parseFloat(cs.borderRightWidth) || 0;
         let borderTop = parseFloat(cs.borderTopWidth) || 0;
         let borderBottom = parseFloat(cs.borderBottomWidth) || 0;
-        let scrollbarWidth = box.scrollHeight > box.clientHeight + 1
-            ? Math.max(0, box.offsetWidth - box.clientWidth - borderLeft - borderRight) : 0;
-        let scrollbarHeight = box.scrollWidth > box.clientWidth + 1
-            ? Math.max(0, box.offsetHeight - box.clientHeight - borderTop - borderBottom) : 0;
-        overlay.style.left = `${rect.left - hostRect.left + borderLeft}px`;
-        overlay.style.top = `${rect.top - hostRect.top + borderTop}px`;
-        overlay.style.width = `${Math.max(0, rect.width - borderLeft - borderRight - scrollbarWidth)}px`;
-        overlay.style.height = `${Math.max(0, rect.height - borderTop - borderBottom - scrollbarHeight)}px`;
+        // clientWidth already excludes any classic scrollbar, and rounds; use
+        // it directly so the overlay's wrap width is the textarea's wrap width.
+        let contentWidth = box.clientWidth;
+        let contentHeight = box.clientHeight;
+        this.overlay.style.left = `${rect.left - hostRect.left + borderLeft}px`;
+        this.overlay.style.top = `${rect.top - hostRect.top + borderTop}px`;
+        this.overlay.style.width = `${contentWidth}px`;
+        this.overlay.style.height = `${contentHeight}px`;
+        this.overlay.style.borderRadius = cs.borderRadius;
+        inner.style.width = `${contentWidth}px`;
     }
 
     /** Re-renders the colored token pills behind the prompt text. */
@@ -653,7 +731,7 @@ class MiniMaxH3PromptReferences {
         let last = 0;
         let match;
         while ((match = tokenRegex.exec(text)) !== null) {
-            html += escapeHtml(text.substring(last, match.index));
+            html += minimaxH3EscapeText(text.substring(last, match.index));
             last = match.index + match[0].length;
             let type, n;
             let legacyAudio = false;
@@ -690,10 +768,10 @@ class MiniMaxH3PromptReferences {
             }
             let cls = valid ? 'minimax-h3-token' : 'minimax-h3-token minimax-h3-token-invalid';
             let style = valid ? ` style="--minimax-ref-color:${color};"` : '';
-            html += `<span class="${cls}"${style}>${escapeHtml(match[0])}</span>`;
+            html += `<span class="${cls}"${style}>${minimaxH3EscapeText(match[0])}</span>`;
         }
-        html += escapeHtml(text.substring(last));
-        this.overlay.innerHTML = html + String.fromCharCode(0x200b);
+        html += minimaxH3EscapeText(text.substring(last));
+        this.overlayInner.innerHTML = html + String.fromCharCode(0x200b);
         this.syncOverlayScroll();
     }
 

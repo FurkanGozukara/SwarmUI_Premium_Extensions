@@ -38,7 +38,8 @@ It exposes the model's complete dynamic reference limits in SwarmUI:
 - Colored `@image1`, `@video1`, and `@audio1` reference tokens with prompt-bar pills
 - `@` autocomplete in the prompt with reference thumbnails
 - Click any attachment card to insert its token at the cursor
-- Automatic token renumbering when a reference is removed
+- Drag attachment cards left/right to reorder them; tokens renumber by position
+- Removing or reordering attachments never edits the prompt text
 - Mixed or single-modality reference generation
 - Current-ComfyUI first/last-frame batching compatibility
 
@@ -54,9 +55,11 @@ token, eg `@image1`. Mention attachments in the prompt in any of these ways:
   `@img1`, `@pic1`, `@vid2`, `@sound1`, and `@image#1` also work)
 
 Tokens render as colored pills in the prompt bar, matching their attachment
-card's color. Tokens pointing at a missing attachment show in red. When you
-remove an attachment, remaining tokens renumber automatically and tokens for
-the removed attachment are cleaned out of the prompt.
+card's color. Attachment numbering follows card position: drag cards
+left/right to reorder them and the tokens renumber accordingly. Your prompt
+text is never modified when attachments are removed or reordered — a token
+pointing at a missing attachment shows in red and is simply omitted at
+generation time, so it never causes an error.
 
 At generation time the tokens are translated to the `<Picture i>`, `<Video i>`,
 and `<Audio i>` labels the MiniMax H3 model expects (audio labels are offset

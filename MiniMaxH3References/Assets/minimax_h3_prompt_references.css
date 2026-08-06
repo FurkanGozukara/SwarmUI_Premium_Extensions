@@ -66,6 +66,18 @@
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--minimax-ref-color, var(--emphasis)) 55%, transparent);
 }
 
+.minimax-h3-reference-dragging {
+    opacity: 0.45;
+}
+
+.minimax-h3-reference-drop-before {
+    box-shadow: -4px 0 0 0 var(--emphasis, #7d5698) !important;
+}
+
+.minimax-h3-reference-drop-after {
+    box-shadow: 4px 0 0 0 var(--emphasis, #7d5698) !important;
+}
+
 .minimax-h3-prompt-references-active .alt-prompt-image-container::after {
     background: color-mix(in srgb, var(--minimax-ref-color, var(--emphasis)) 24%, var(--background));
     border-radius: 4px;
@@ -127,15 +139,22 @@ audio.minimax-h3-prompt-reference-preview {
     background: transparent;
     border: none;
     box-sizing: border-box;
-    color: var(--text);
     margin: 0;
     overflow: hidden;
-    overflow-wrap: break-word;
+    padding: 0;
     pointer-events: none;
     position: absolute;
-    white-space: pre-wrap;
-    word-break: normal;
     z-index: 3;
+}
+
+.minimax-h3-prompt-highlight-inner {
+    box-sizing: border-box;
+    color: var(--text);
+    min-height: 100%;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+    will-change: transform;
+    word-break: normal;
 }
 
 #alt_prompt_textbox.minimax-h3-highlight-on {
