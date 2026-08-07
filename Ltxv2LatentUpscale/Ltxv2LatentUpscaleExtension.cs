@@ -34,7 +34,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds LTXV2 latent upscaling and native LTX 2.3 Foley video-to-audio generation.";
         License = "MIT";
-        Version = "0.8.0";
+        Version = "0.8.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -95,15 +95,14 @@ public class Ltxv2LatentUpscaleExtension : Extension
             var originalI2VAction = steps[i2vIndex].Action;
             steps[i2vIndex] = new WorkflowGenerator.WorkflowGenStep(g =>
             {
-                // Save reference to original image BEFORE I2V encoding modifies it
+                // Only the LTX upscale path needs a raw source image. Converting
+                // eagerly breaks audio-only workflows whose current media is AUDIO.
+                bool shouldUpscale = ShouldApplyI2VUpscale(g);
                 JArray originalInputImage = null;
-                if (g.CurrentMedia is not null)
+                if (shouldUpscale && g.CurrentMedia is not null)
                 {
                     originalInputImage = new JArray(g.CurrentMedia.AsRawImage(g.CurrentVae).Path);
                 }
-
-                // Check if we should use upscale workflow
-                bool shouldUpscale = ShouldApplyI2VUpscale(g);
 
                 if (shouldUpscale)
                 {
