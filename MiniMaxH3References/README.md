@@ -59,9 +59,25 @@ It exposes the model's complete dynamic reference limits in SwarmUI:
 - Mixed or single-modality reference generation
 - Current-ComfyUI first/last-frame batching compatibility
 
+## Add A Reference With Trim
+
+The green **Add A Reference With Trim** button next to **Add References** adds one
+video or audio reference through a trim popup: pick the file, preview it, and drag
+the start/end handles (or type exact seconds) to select the window to use. The
+timeline supports click-to-seek, set-start/set-end at the playhead, and a
+window-only preview. Leaving the full range selected adds the file untrimmed.
+
+- Audio is cut sample-accurately in the browser and attached as a WAV of just the
+  selected window.
+- Video keeps its full quality: the untouched file is uploaded and the selected
+  window is applied on the backend by the exact ComfyUI `Video Slice` node (also
+  honored for the soundtrack in Audio Only mode), so nothing is re-encoded in the
+  browser. The card shows a `✂ start – end` badge, and windows follow their card
+  when attachments are reordered.
+
 ## Referencing attachments in the prompt
 
-Use any MiniMax H3 checkpoint and add references with the **Add references**
+Use any MiniMax H3 checkpoint and add references with the **Add References**
 button, drag-and-drop, or paste. Every attachment card shows its own colored
 token, eg `@image1`. Mention attachments in the prompt in any of these ways:
 

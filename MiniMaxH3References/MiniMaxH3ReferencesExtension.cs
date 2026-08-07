@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
@@ -19,6 +20,7 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<bool> Enabled;
     private static T2IRegisteredParam<string> ReferenceImageSize;
     private static T2IRegisteredParam<double> ReferenceMaxSeconds;
+    private static T2IRegisteredParam<string> ReferenceVideoTrims;
     private static List<T2IRegisteredParam<VideoFile>> ReferenceVideos = [];
     private static List<T2IRegisteredParam<AudioFile>> ReferenceAudios = [];
     private static T2IRegisteredParam<bool> SpeedOptimize;
@@ -33,9 +35,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), audio-only generation on a 32x32 video canvas, and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
         License = "MIT";
-        Version = "1.7.1";
+        Version = "1.8.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -139,6 +141,11 @@ public class MiniMaxH3ReferencesExtension : Extension
             "Maximum duration used from each reference video or audio file. Clean 2-15 second clips are the quality-tested recommendation, but longer references are allowed and may use substantially more memory and time.",
             "15", Min: 1, Max: 3600, Step: 0.5, ViewMax: 60, FeatureFlag: "comfyui", Group: group,
             OrderPriority: -8.9, DependNonDefault: Enabled.Type.ID));
+        ReferenceVideoTrims = T2IParamTypes.Register<string>(new(
+            "MiniMax H3 Reference Video Trims",
+            "Internal slot populated by the 'Add A Reference With Trim' uploader: comma-separated '<video slot>:<start>-<end>' second windows, eg '1:2.5-8'. Videos without an entry start from the file beginning. Trimmed audio references are already cut in the browser and never appear here.",
+            "", IgnoreIf: "", FeatureFlag: "comfyui", Group: group,
+            OrderPriority: -8.85, DependNonDefault: Enabled.Type.ID));
 
         ReferenceVideos =
         [
@@ -351,14 +358,26 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
 
         int audioReferenceIndex = 0;
+        Dictionary<int, (double Start, double End)> videoTrims = ParseVideoTrims(g.UserInput.Get(ReferenceVideoTrims, ""));
         for (int i = 0; i < videos.Count; i++)
         {
+            // The 'Add A Reference With Trim' uploader sends the untouched video plus a
+            // per-slot window; the exact cut happens here on the backend instead of a
+            // lossy client-side re-encode. Untrimmed slots keep the old 0-start behavior.
+            double trimStart = 0;
+            double trimSeconds = referenceMaxSeconds;
+            if (videoTrims.TryGetValue(i + 1, out (double Start, double End) trim))
+            {
+                trimStart = trim.Start;
+                trimSeconds = Math.Min(trim.End - trim.Start, referenceMaxSeconds);
+            }
             if (audioOnly)
             {
                 string soundtrack = g.CreateNode("SECoursesLoadVideoAudioB64", new JObject()
                 {
                     ["video_base64"] = videos[i].AsBase64,
-                    ["max_seconds"] = referenceMaxSeconds
+                    ["max_seconds"] = trimSeconds,
+                    ["start_seconds"] = trimStart
                 });
                 inputs[$"ref_audios.ref_audio_{audioReferenceIndex++}"] = WorkflowGenerator.NodePath(soundtrack, 0);
                 continue;
@@ -370,8 +389,8 @@ public class MiniMaxH3ReferencesExtension : Extension
             string trimmed = g.CreateNode("Video Slice", new JObject()
             {
                 ["video"] = WorkflowGenerator.NodePath(loaded, 0),
-                ["start_time"] = 0.0,
-                ["duration"] = referenceMaxSeconds,
+                ["start_time"] = trimStart,
+                ["duration"] = trimSeconds,
                 ["strict_duration"] = false
             });
             string components = g.CreateNode("GetVideoComponents", new JObject()
@@ -416,7 +435,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         g.CreateNode("MiniMaxH3ReferenceToVideo", inputs, "6");
         g.FinalPrompt = ["6", 0];
         string videoMode = audioOnly ? "soundtrack-only video" : "full video";
-        Logs.Info($"Created MiniMax H3 reference workflow with {images.Count} image, {videos.Count} {videoMode}, and {audios.Count} standalone audio reference(s); reference maximum {referenceMaxSeconds:0.###} seconds each.");
+        string trimNote = videoTrims.Count > 0 ? $" {videoTrims.Count} video(s) use a custom trim window." : "";
+        Logs.Info($"Created MiniMax H3 reference workflow with {images.Count} image, {videos.Count} {videoMode}, and {audios.Count} standalone audio reference(s); reference maximum {referenceMaxSeconds:0.###} seconds each.{trimNote}");
     }
 
     /// <summary>Force the disposable video stream to MiniMax H3's smallest valid canvas.</summary>
@@ -491,6 +511,31 @@ public class MiniMaxH3ReferencesExtension : Extension
         }, "9");
         g.SkipFurtherSteps = true;
         Logs.Info("MiniMax H3 Audio Only will return one lossless FLAC and no video output.");
+    }
+
+    private static readonly Regex VideoTrimMatcher = new(
+        @"^(\d{1,2}):(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$", RegexOptions.Compiled);
+
+    /// <summary>Parses the internal per-slot video trim string, eg "1:2.5-8,3:0-4.25", into
+    /// 1-based slot -> (start, end) seconds. Malformed or empty windows are ignored.</summary>
+    public static Dictionary<int, (double Start, double End)> ParseVideoTrims(string trims)
+    {
+        Dictionary<int, (double Start, double End)> result = [];
+        foreach (string part in (trims ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            Match match = VideoTrimMatcher.Match(part);
+            if (!match.Success)
+            {
+                continue;
+            }
+            double start = double.Parse(match.Groups[2].Value, CultureInfo.InvariantCulture);
+            double end = double.Parse(match.Groups[3].Value, CultureInfo.InvariantCulture);
+            if (end > start)
+            {
+                result[int.Parse(match.Groups[1].Value)] = (start, end);
+            }
+        }
+        return result;
     }
 
     private static readonly Regex PromptReferenceTokenMatcher = new(

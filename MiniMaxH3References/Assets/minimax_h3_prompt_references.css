@@ -12,6 +12,20 @@
     padding: 0.25rem 0.75rem;
 }
 
+.basic-button.minimax-h3-prompt-reference-trim-upload {
+    background: #14805e;
+    border: 1px solid #1db98a;
+    border-radius: 6px !important;
+    color: #fff;
+    min-height: 2rem;
+    padding: 0.25rem 0.75rem;
+}
+
+.basic-button.minimax-h3-prompt-reference-trim-upload:hover {
+    background: #199a72;
+    color: #fff;
+}
+
 .minimax-h3-prompt-reference-status {
     color: color-mix(in srgb, var(--text) 72%, var(--background));
     font-size: 0.82rem;
@@ -127,6 +141,199 @@ audio.minimax-h3-prompt-reference-preview {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.minimax-h3-prompt-reference-trim-badge {
+    color: #1db98a;
+    display: block;
+    font-family: monospace;
+    font-size: 0.68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+
+/* ==================== Single-reference trim popup ==================== */
+
+.minimax-h3-trim-modal {
+    align-items: center;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    position: fixed;
+    z-index: 10000;
+}
+
+.minimax-h3-trim-panel {
+    background: var(--background);
+    border: 1px solid var(--light-border);
+    border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-height: 92vh;
+    max-width: min(94vw, 46rem);
+    overflow: auto;
+    padding: 0.8rem;
+    width: 46rem;
+}
+
+.minimax-h3-trim-head {
+    align-items: center;
+    display: flex;
+    gap: 0.6rem;
+}
+
+.minimax-h3-trim-title {
+    color: #1db98a;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.minimax-h3-trim-filename {
+    color: color-mix(in srgb, var(--text) 70%, var(--background));
+    flex: 1;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.minimax-h3-trim-close {
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1.3rem;
+    line-height: 1;
+    padding: 0 0.3rem;
+}
+
+.minimax-h3-trim-preview {
+    display: flex;
+    justify-content: center;
+}
+
+.minimax-h3-trim-media-video {
+    background: #000;
+    border-radius: 6px;
+    max-height: 46vh;
+    max-width: 100%;
+}
+
+.minimax-h3-trim-media-audio {
+    width: 100%;
+}
+
+.minimax-h3-trim-track {
+    background: color-mix(in srgb, var(--background) 70%, var(--light-border));
+    border: 1px solid var(--light-border);
+    border-radius: 6px;
+    cursor: pointer;
+    height: 2.1rem;
+    position: relative;
+    touch-action: none;
+}
+
+.minimax-h3-trim-fill {
+    background: color-mix(in srgb, #1db98a 38%, transparent);
+    border-radius: 5px;
+    bottom: 0;
+    position: absolute;
+    top: 0;
+}
+
+.minimax-h3-trim-playhead {
+    background: var(--text);
+    bottom: 0;
+    opacity: 0.85;
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+    width: 2px;
+}
+
+.minimax-h3-trim-handle {
+    background: #1db98a;
+    border: 1px solid color-mix(in srgb, #1db98a 55%, #000);
+    border-radius: 4px;
+    bottom: -0.3rem;
+    cursor: ew-resize;
+    position: absolute;
+    top: -0.3rem;
+    transform: translateX(-50%);
+    touch-action: none;
+    width: 0.8rem;
+    z-index: 2;
+}
+
+.minimax-h3-trim-fields {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.minimax-h3-trim-label {
+    align-items: center;
+    display: inline-flex;
+    font-size: 0.82rem;
+    gap: 0.35rem;
+}
+
+.minimax-h3-trim-input {
+    background: var(--background);
+    border: 1px solid var(--light-border);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 0.15rem 0.3rem;
+    width: 5.2rem;
+}
+
+.basic-button.minimax-h3-trim-tool {
+    border-radius: 5px !important;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.55rem;
+}
+
+.minimax-h3-trim-length {
+    color: color-mix(in srgb, var(--text) 65%, var(--background));
+    font-size: 0.8rem;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.minimax-h3-trim-length-active {
+    color: #1db98a;
+    font-weight: 600;
+}
+
+.minimax-h3-trim-actions {
+    align-items: center;
+    border-top: 1px solid var(--light-border);
+    display: flex;
+    gap: 0.5rem;
+    padding-top: 0.6rem;
+}
+
+.basic-button.minimax-h3-trim-add {
+    background: #14805e;
+    border: 1px solid #1db98a;
+    border-radius: 6px !important;
+    color: #fff;
+}
+
+.basic-button.minimax-h3-trim-add:hover {
+    background: #199a72;
+    color: #fff;
+}
+
+.minimax-h3-trim-note {
+    color: color-mix(in srgb, var(--text) 65%, var(--background));
+    font-size: 0.8rem;
 }
 
 /* ==================== Prompt-bar colored token pills ==================== */
