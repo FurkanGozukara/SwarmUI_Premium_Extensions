@@ -24,6 +24,20 @@ Threshold** (default 0.08, the NVlabs-advertised near-lossless policy; higher sk
 aggressively) and **MiniMax H3 Speed Sparse
 Attention** (`auto` / `enabled` / `disabled`).
 
+## Audio-only quality mode
+
+**MiniMax H3 Audio Only** uses the model's minimum 32x32 disposable video canvas,
+decodes only the sampled audio latent, and returns lossless FLAC without decoding or
+saving generated video. The quality-first preset uses 50 `res_multistep` / `beta`
+steps at 24 FPS and leaves the speed optimizer off by default.
+
+The extension selects FL2VA automatically for text-only prompts and Ref2VA when any
+attachment is present. In audio-only mode, a reference video is decoded directly as
+soundtrack audio; its frames are not decoded or passed to conditioning, and `@video1`
+maps to `<Audio 1>`. **Reference Max Seconds** defaults to 15 per attachment, but this
+is not a hard cap. Longer references and output above the quality-tested 4-15 second
+range are allowed up to the native MiniMax H3 node limit and remain experimental.
+
 ## Reference uploader
 
 It exposes the model's complete dynamic reference limits in SwarmUI:
@@ -32,7 +46,7 @@ It exposes the model's complete dynamic reference limits in SwarmUI:
 - Strict MiniMax H3 architecture scoping, leaving every other model's native prompt-image uploader unchanged
 - Drag-and-drop and clipboard media support directly on the main prompt
 - Up to 9 images through Prompt Images
-- Up to 3 videos, resampled to 24 FPS and limited to 15 seconds
+- Up to 3 videos, resampled to 24 FPS in video mode and bounded by the user-selected Reference Max Seconds
 - Up to 3 standalone audio references
 - Automatic soundtrack pairing for every reference video
 - Colored `@image1`, `@video1`, and `@audio1` reference tokens with prompt-bar pills
@@ -63,5 +77,6 @@ generation time, so it never causes an error.
 
 At generation time the tokens are translated to the `<Picture i>`, `<Video i>`,
 and `<Audio i>` labels the MiniMax H3 model expects (audio labels are offset
-past video soundtracks automatically). Typing those legacy labels directly
-still works and they get the same colored pills.
+past video soundtracks automatically). In audio-only mode, video tokens become
+audio tokens because only their soundtracks are used. Typing those legacy labels
+directly still works and they get the same colored pills.

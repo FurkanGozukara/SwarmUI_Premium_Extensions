@@ -8,6 +8,7 @@ using SwarmUI.Core;
 using SwarmUI.Media;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
+using SwarmUI.WebAPI;
 
 namespace FurkanGozukara.SwarmExtensions.MiniMaxH3References;
 
@@ -17,11 +18,13 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static bool _initialized;
     private static T2IRegisteredParam<bool> Enabled;
     private static T2IRegisteredParam<string> ReferenceImageSize;
+    private static T2IRegisteredParam<double> ReferenceMaxSeconds;
     private static List<T2IRegisteredParam<VideoFile>> ReferenceVideos = [];
     private static List<T2IRegisteredParam<AudioFile>> ReferenceAudios = [];
     private static T2IRegisteredParam<bool> SpeedOptimize;
     private static T2IRegisteredParam<double> SpeedCacheThreshold;
     private static T2IRegisteredParam<string> SpeedSparseAttention;
+    private static T2IRegisteredParam<bool> AudioOnly;
 
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3SpeedOptimizer node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string SpeedFeatureId = "minimax_h3_speed";
@@ -30,9 +33,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), audio-only generation on a 32x32 video canvas, and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
         License = "MIT";
-        Version = "1.5.1";
+        Version = "1.7.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -50,10 +53,50 @@ public class MiniMaxH3ReferencesExtension : Extension
         // Advertise the speed feature only when the backend actually has the optimizer node.
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3SpeedOptimizer"] = SpeedFeatureId;
         RegisterParameters();
+        // Audio-only H3 intentionally uses a 32px disposable video stream and
+        // supports the native H3 frame range beyond SwarmUI's generic video cap.
+        // Provide those relaxed types only while Audio Only is enabled, and parse
+        // that switch before the dependent parameters.
+        T2IAPI.AlwaysTopKeys.Add(AudioOnly.Type.ID);
+        T2IParamTypes.FakeTypeProviders.Add(AudioOnlyParamType);
         WorkflowGenerator.AddStep(ApplyReferences, -7.9);
+        WorkflowGenerator.AddStep(ApplyAudioOnlyCanvas, -7.8);
+        WorkflowGenerator.AddModelGenStep(ApplyAudioOnlyModelRouting, -3.6);
         WorkflowGenerator.AddModelGenStep(ApplySpeedOptimizations, -3.5);
+        WorkflowGenerator.AddStep(ExtractAudioOnly, 0.9);
+        WorkflowGenerator.AddStep(SaveAudioOnlyLossless, 9.9);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
+    }
+
+    private static T2IParamType AudioOnlyParamType(string name, T2IParamInput input)
+    {
+        if (input is null || !input.Get(AudioOnly, false))
+        {
+            return null;
+        }
+        T2IParamType coreType = name switch
+        {
+            "width" => T2IParamTypes.Width.Type,
+            "height" => T2IParamTypes.Height.Type,
+            "sidelength" => T2IParamTypes.SideLength.Type,
+            "text2videoframes" => T2IParamTypes.Text2VideoFrames.Type,
+            _ => null
+        };
+        if (coreType is null)
+        {
+            return null;
+        }
+        if (name == "text2videoframes")
+        {
+            return coreType with
+            {
+                Max = 3600,
+                ViewMax = 720,
+                Description = "MiniMax H3 frame count at 24 FPS. Values are rounded up to the required 17k+5 grid. About 4-15 seconds is quality-tested; longer generation is allowed but experimental."
+            };
+        }
+        return coreType with { Min = 32, ViewMin = 32 };
     }
 
     private static void RegisterParameters()
@@ -74,6 +117,11 @@ public class MiniMaxH3ReferencesExtension : Extension
             "Sol-Attn sparse attention mode for the MiniMax H3 4x Speed parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
             "auto", GetValues: _ => ["auto", "enabled", "disabled"], IsAdvanced: true,
             FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 16.5));
+        AudioOnly = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 Audio Only",
+            "Generate only MiniMax H3's synchronized audio stream. The extension forces the otherwise-discarded video canvas to 32x32, skips video VAE decoding and video saving, and returns one lossless FLAC audio file. Text-only generation and optional image, video, or audio references are supported; in this mode an input video's soundtrack is decoded directly and its frames are never used.",
+            "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupCore,
+            OrderPriority: -15.8, ChangeWeight: 8));
 
         T2IParamGroup group = new("MiniMax H3 References", Open: true, OrderPriority: 8,
             Description: "Add every image, video, and audio reference directly beside the main prompt. Video soundtracks are paired automatically. Type '@' in the prompt to reference attachments, eg '@image1' or '@video2' (legacy '<Picture 1>' labels still work).");
@@ -86,6 +134,11 @@ public class MiniMaxH3ReferencesExtension : Extension
             "Match limits each image reference to the output pixel area. Max preserves more reference detail and uses more memory and time.",
             "match", GetValues: _ => ["match", "max"], FeatureFlag: "comfyui", Group: group,
             OrderPriority: -9, DependNonDefault: Enabled.Type.ID));
+        ReferenceMaxSeconds = T2IParamTypes.Register<double>(new(
+            "MiniMax H3 Reference Max Seconds",
+            "Maximum duration used from each reference video or audio file. Clean 2-15 second clips are the quality-tested recommendation, but longer references are allowed and may use substantially more memory and time.",
+            "15", Min: 1, Max: 3600, Step: 0.5, ViewMax: 60, FeatureFlag: "comfyui", Group: group,
+            OrderPriority: -8.9, DependNonDefault: Enabled.Type.ID));
 
         ReferenceVideos =
         [
@@ -104,7 +157,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             return T2IParamTypes.Register<VideoFile>(new(
                 $"MiniMax H3 Reference Video {ordinal}",
-                "Internal slot populated by the MiniMax H3 prompt reference uploader. The first 15 seconds are used, frames are resampled to 24 FPS, and an available soundtrack is paired automatically.",
+                "Internal slot populated by the MiniMax H3 prompt reference uploader. The selected Reference Max Seconds value is used. Normal video mode resamples frames to 24 FPS and pairs the soundtrack; Audio Only mode extracts only the soundtrack and never decodes the frames.",
                 null, FeatureFlag: "comfyui", Group: group, OrderPriority: priority,
                 DependNonDefault: Enabled.Type.ID, DoNotPreview: true));
         }
@@ -117,6 +170,51 @@ public class MiniMaxH3ReferencesExtension : Extension
                 null, FeatureFlag: "comfyui", Group: group, OrderPriority: priority,
                 DependNonDefault: Enabled.Type.ID, DoNotPreview: true));
         }
+    }
+
+    /// <summary>Use FL2VA for text-only audio and Ref2VA only when this request has attachments.</summary>
+    private static void ApplyAudioOnlyModelRouting(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(AudioOnly, false) || !g.IsMiniMaxH3())
+        {
+            return;
+        }
+        bool hasReferences = HasAnyReferences(g);
+        string desiredVariant = hasReferences ? "ref2va" : "fl2va";
+        int matched = 0;
+        int changed = 0;
+        foreach (string nodeClass in new[] { "UNETLoader", "UnetLoaderGGUF", "UNETLoaderNF4" })
+        {
+            g.RunOnNodesOfClass(nodeClass, (_, node) =>
+            {
+                if (node["inputs"] is not JObject inputs || inputs["unet_name"] is not JValue nameValue)
+                {
+                    return;
+                }
+                string currentName = $"{nameValue}";
+                if (!currentName.Contains("fl2va", StringComparison.OrdinalIgnoreCase)
+                    && !currentName.Contains("ref2va", StringComparison.OrdinalIgnoreCase))
+                {
+                    return;
+                }
+                matched++;
+                string routedName = Regex.Replace(
+                    currentName, "fl2va|ref2va", desiredVariant, RegexOptions.IgnoreCase);
+                if (routedName != currentName)
+                {
+                    inputs["unet_name"] = routedName;
+                    changed++;
+                }
+            });
+        }
+        if (matched == 0)
+        {
+            Logs.Warning("MiniMax H3 Audio Only could not identify an FL2VA/Ref2VA model filename for automatic routing.");
+            return;
+        }
+        Logs.Info(
+            $"MiniMax H3 Audio Only selected {desiredVariant.ToUpperInvariant()} "
+            + $"for {(hasReferences ? "reference" : "text-only")} conditioning ({changed} loader change(s)).");
     }
 
     /// <summary>Model-gen step: wrap the loaded MiniMax H3 model (and video VAE) with the sol-engine speed nodes.</summary>
@@ -188,6 +286,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         List<VideoFile> videos = GetValues(g, ReferenceVideos);
         List<AudioFile> audios = GetValues(g, ReferenceAudios);
+        bool audioOnly = g.UserInput.Get(AudioOnly, false);
+        double referenceMaxSeconds = g.UserInput.Get(ReferenceMaxSeconds, 15.0);
         int standaloneAudioCount = audios.Count;
         // The core 'Video Audio Reference' param no longer exists in newer SwarmUI versions,
         // so resolve it by ID at runtime instead of a compile-time field reference. On old
@@ -210,10 +310,15 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         if (images.Count + videos.Count + audios.Count == 0)
         {
+            if (audioOnly)
+            {
+                Logs.Info("MiniMax H3 Audio Only has no attachments; using text-only conditioning.");
+                return;
+            }
             throw new SwarmUserErrorException("MiniMax H3 References needs at least one Prompt Image, reference video, or reference audio file.");
         }
         string prompt = TranslatePromptReferenceTokens(g.UserInput.Get(T2IParamTypes.Prompt, ""),
-            images.Count, videos.Count, standaloneAudioCount, videos.Count + (hasLegacyAudio ? 1 : 0));
+            images.Count, videos.Count, standaloneAudioCount, videos.Count + (hasLegacyAudio ? 1 : 0), audioOnly);
 
         int frameCount = WorkflowGenerator.MiniMaxH3AlignFrames(g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 124));
         JObject inputs = new()
@@ -245,8 +350,19 @@ public class MiniMaxH3ReferencesExtension : Extension
             }
         }
 
+        int audioReferenceIndex = 0;
         for (int i = 0; i < videos.Count; i++)
         {
+            if (audioOnly)
+            {
+                string soundtrack = g.CreateNode("SECoursesLoadVideoAudioB64", new JObject()
+                {
+                    ["video_base64"] = videos[i].AsBase64,
+                    ["max_seconds"] = referenceMaxSeconds
+                });
+                inputs[$"ref_audios.ref_audio_{audioReferenceIndex++}"] = WorkflowGenerator.NodePath(soundtrack, 0);
+                continue;
+            }
             string loaded = g.CreateNode("SwarmLoadVideoB64", new JObject()
             {
                 ["video_base64"] = videos[i].AsBase64
@@ -255,7 +371,7 @@ public class MiniMaxH3ReferencesExtension : Extension
             {
                 ["video"] = WorkflowGenerator.NodePath(loaded, 0),
                 ["start_time"] = 0.0,
-                ["duration"] = 15.0,
+                ["duration"] = referenceMaxSeconds,
                 ["strict_duration"] = false
             });
             string components = g.CreateNode("GetVideoComponents", new JObject()
@@ -276,7 +392,13 @@ public class MiniMaxH3ReferencesExtension : Extension
         for (int i = 0; i < audios.Count; i++)
         {
             string loaded = g.CreateAudioLoadNode(audios[i], "${minimaxhreferenceaudio." + i + "}");
-            inputs[$"ref_audios.ref_audio_{i}"] = WorkflowGenerator.NodePath(loaded, 0);
+            string trimmed = g.CreateNode("SECoursesTrimAudio", new JObject()
+            {
+                ["audio"] = WorkflowGenerator.NodePath(loaded, 0),
+                ["max_seconds"] = referenceMaxSeconds
+            });
+            int index = audioOnly ? audioReferenceIndex++ : i;
+            inputs[$"ref_audios.ref_audio_{index}"] = WorkflowGenerator.NodePath(trimmed, 0);
         }
 
         List<string> replacedReferenceNodes = [];
@@ -293,7 +415,82 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         g.CreateNode("MiniMaxH3ReferenceToVideo", inputs, "6");
         g.FinalPrompt = ["6", 0];
-        Logs.Info($"Created MiniMax H3 reference workflow with {images.Count} image, {videos.Count} video, and {audios.Count} standalone audio reference(s).");
+        string videoMode = audioOnly ? "soundtrack-only video" : "full video";
+        Logs.Info($"Created MiniMax H3 reference workflow with {images.Count} image, {videos.Count} {videoMode}, and {audios.Count} standalone audio reference(s); reference maximum {referenceMaxSeconds:0.###} seconds each.");
+    }
+
+    /// <summary>Force the disposable video stream to MiniMax H3's smallest valid canvas.</summary>
+    private static void ApplyAudioOnlyCanvas(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(AudioOnly, false))
+        {
+            return;
+        }
+        if (!g.IsMiniMaxH3())
+        {
+            throw new SwarmUserErrorException("MiniMax H3 Audio Only requires a MiniMax H3 model.");
+        }
+
+        int changed = 0;
+        foreach (string nodeClass in new[] { "EmptyMiniMaxH3LatentAV", "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo" })
+        {
+            g.RunOnNodesOfClass(nodeClass, (_, node) =>
+            {
+                if (node["inputs"] is not JObject inputs)
+                {
+                    return;
+                }
+                inputs["width"] = 32;
+                inputs["height"] = 32;
+                changed++;
+            });
+        }
+        if (changed == 0)
+        {
+            throw new SwarmReadableErrorException("MiniMax H3 Audio Only could not find an H3 canvas node in the generated workflow.");
+        }
+        Logs.Info($"MiniMax H3 Audio Only forced {changed} generation canvas node(s) to 32x32.");
+    }
+
+    /// <summary>Separate and decode only the audio latent before SwarmUI's normal video decode stage.</summary>
+    private static void ExtractAudioOnly(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(AudioOnly, false))
+        {
+            return;
+        }
+        if (!g.IsMiniMaxH3() || g.CurrentMedia is null || g.CurrentAudioVae is null)
+        {
+            throw new SwarmReadableErrorException("MiniMax H3 Audio Only could not access the sampled H3 audio latent and audio VAE.");
+        }
+        if (g.CurrentMedia.DataType != WGNodeData.DT_LATENT_AUDIOVIDEO)
+        {
+            throw new SwarmReadableErrorException(
+                $"MiniMax H3 Audio Only expected a joint audio/video latent but received {g.CurrentMedia.DataType}.");
+        }
+
+        g.CurrentMedia = g.CurrentMedia.DecodeLatents(g.CurrentAudioVae, true, "8");
+        Logs.Info("MiniMax H3 Audio Only extracted the audio latent and skipped video decoding.");
+    }
+
+    /// <summary>Save the decoded stream as FLAC before SwarmUI's generic MP3 output step.</summary>
+    private static void SaveAudioOnlyLossless(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(AudioOnly, false))
+        {
+            return;
+        }
+        if (g.CurrentMedia is null || g.CurrentMedia.DataType != WGNodeData.DT_AUDIO)
+        {
+            throw new SwarmReadableErrorException("MiniMax H3 Audio Only could not access decoded audio for lossless saving.");
+        }
+        g.CreateNode("SaveAudio", new JObject()
+        {
+            ["audio"] = g.CurrentMedia.Path,
+            ["filename_prefix"] = "audio/SwarmUI_MiniMax_H3_Audio_Only"
+        }, "9");
+        g.SkipFurtherSteps = true;
+        Logs.Info("MiniMax H3 Audio Only will return one lossless FLAC and no video output.");
     }
 
     private static readonly Regex PromptReferenceTokenMatcher = new(
@@ -305,11 +502,13 @@ public class MiniMaxH3ReferencesExtension : Extension
     /// "&lt;Picture 1&gt;" / "&lt;Video 2&gt;" / "&lt;Audio n&gt;" labels the MiniMax H3 node expects.
     /// Audio labels index video soundtracks first, so standalone audio tokens are offset by the
     /// video count (and by the legacy audio reference, when present). Legacy labels typed directly
-    /// in the prompt pass through unchanged. Tokens that point at a missing reference (eg '@image3'
+    /// in the prompt pass through unchanged. In audio-only mode video tokens map to the corresponding
+    /// audio labels because only the soundtrack is conditioned.
+    /// Tokens that point at a missing reference (eg '@image3'
     /// with two images attached) are silently omitted, together with one adjacent space, so a stale
     /// token left in the prompt never blocks generation.
     /// </summary>
-    public static string TranslatePromptReferenceTokens(string prompt, int imageCount, int videoCount, int standaloneAudioCount, int audioLabelOffset)
+    public static string TranslatePromptReferenceTokens(string prompt, int imageCount, int videoCount, int standaloneAudioCount, int audioLabelOffset, bool audioOnly = false)
     {
         if (string.IsNullOrEmpty(prompt) || !prompt.Contains('@'))
         {
@@ -327,7 +526,7 @@ public class MiniMaxH3ReferencesExtension : Extension
             (string label, int count, int offset) = type switch
             {
                 "image" or "img" or "picture" or "pic" => ("Picture", imageCount, 0),
-                "video" or "vid" => ("Video", videoCount, 0),
+                "video" or "vid" => (audioOnly ? "Audio" : "Video", videoCount, 0),
                 _ => ("Audio", standaloneAudioCount, audioLabelOffset),
             };
             if (number >= 1 && number <= count)
@@ -396,6 +595,31 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             Logs.Info($"Updated {replacements} MiniMax H3 image batch node(s) for the current ComfyUI API.");
         }
+    }
+
+    private static bool HasAnyReferences(WorkflowGenerator g)
+    {
+        if (g.UserInput.Get(T2IParamTypes.PromptImages, new List<Image>()).Count > 0)
+        {
+            return true;
+        }
+        foreach (T2IRegisteredParam<VideoFile> parameter in ReferenceVideos)
+        {
+            if (g.UserInput.TryGet(parameter, out VideoFile _))
+            {
+                return true;
+            }
+        }
+        foreach (T2IRegisteredParam<AudioFile> parameter in ReferenceAudios)
+        {
+            if (g.UserInput.TryGet(parameter, out AudioFile _))
+            {
+                return true;
+            }
+        }
+        return T2IParamTypes.Types.TryGetValue("videoaudioreference", out T2IParamType legacyAudioType)
+            && g.UserInput.TryGetRaw(legacyAudioType, out object legacyAudioValue)
+            && legacyAudioValue is AudioFile;
     }
 
     private static List<T> GetValues<T>(WorkflowGenerator g, List<T2IRegisteredParam<T>> parameters)
