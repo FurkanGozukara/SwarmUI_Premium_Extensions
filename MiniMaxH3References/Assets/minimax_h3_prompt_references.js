@@ -151,6 +151,11 @@ class MiniMaxH3PromptReferences {
         this.status.className = 'minimax-h3-prompt-reference-status';
         this.status.setAttribute('aria-live', 'polite');
 
+        this.soundtrackHint = document.createElement('span');
+        this.soundtrackHint.className = 'minimax-h3-prompt-reference-hint';
+        this.soundtrackHint.textContent = "For @video1's soundtrack, type <Audio 1>; @audio1 is the first standalone audio file";
+        this.soundtrackHint.title = "A reference video's soundtrack uses the native <Audio N> label. Standalone @audioN tokens always refer to standalone audio attachments and are offset after video soundtracks automatically.";
+
         this.hint = document.createElement('span');
         this.hint.className = 'minimax-h3-prompt-reference-hint';
         this.hint.textContent = 'Type @ in the prompt to reference';
@@ -164,7 +169,7 @@ class MiniMaxH3PromptReferences {
         this.fileInput.className = 'minimax-h3-prompt-reference-file-input';
         this.fileInput.setAttribute('aria-label', 'Add MiniMax H3 prompt references');
 
-        this.toolbar.append(this.uploadButton, this.status, this.hint, this.fileInput);
+        this.toolbar.append(this.uploadButton, this.status, this.soundtrackHint, this.hint, this.fileInput);
         this.extraArea.prepend(this.toolbar);
     }
 

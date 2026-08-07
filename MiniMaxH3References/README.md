@@ -50,6 +50,8 @@ It exposes the model's complete dynamic reference limits in SwarmUI:
 - Up to 3 standalone audio references
 - Automatic soundtrack pairing for every reference video
 - Colored `@image1`, `@video1`, and `@audio1` reference tokens with prompt-bar pills
+- Clear toolbar guidance that `<Audio 1>` addresses `@video1`'s soundtrack while
+  `@audio1` remains the first standalone audio file
 - `@` autocomplete in the prompt with reference thumbnails
 - Click any attachment card to insert its token at the cursor
 - Drag attachment cards left/right to reorder them; tokens renumber by position
@@ -77,6 +79,8 @@ generation time, so it never causes an error.
 
 At generation time the tokens are translated to the `<Picture i>`, `<Video i>`,
 and `<Audio i>` labels the MiniMax H3 model expects (audio labels are offset
-past video soundtracks automatically). In audio-only mode, video tokens become
-audio tokens because only their soundtracks are used. Typing those legacy labels
-directly still works and they get the same colored pills.
+past video soundtracks automatically). With `@video1` and standalone `@audio1`
+attached, use `<Audio 1>` for `@video1`'s soundtrack; `@audio1` remains the
+standalone file and is translated to `<Audio 2>`. In audio-only mode, video
+tokens become audio tokens because only their soundtracks are used. Typing
+those legacy labels directly still works and they get the same colored pills.
