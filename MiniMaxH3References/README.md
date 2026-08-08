@@ -42,8 +42,9 @@ Speed**.
 Measured on one real-geometry H3 block at 38k packed tokens on an RTX 5090: 3.84 GB peak
 unpatched, 3.30 GB with this on.
 
-**MiniMax H3 Low VRAM Max Saving** (under *Advanced Sampling*) additionally splits attention
-into head groups, taking the same measurement down to 2.25 GB — roughly 40% instead of 15%.
+**MiniMax H3 Low VRAM Max Saving**, which appears in Core Parameters directly beneath the Low
+VRAM checkbox once that is ticked, additionally splits attention into head groups, taking the
+same measurement down to 2.25 GB — roughly 40% instead of 15%.
 That part is not output-preserving: heads are mathematically independent, but an attention
 kernel picks its tiling and quantization scales from the tensor it is handed, so a head group
 can round about one bf16 ulp differently than those heads do inside the whole tensor, and a

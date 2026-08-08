@@ -136,8 +136,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         LowVramMaxSaving = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 Low VRAM Max Saving",
             "Also split MiniMax H3's attention into head groups, taking the peak VRAM reduction to roughly 40% instead of around 15%.\nThis part is not output-preserving. Heads are mathematically independent, but an attention kernel picks its tiling and quantization scales from the tensor it is handed, so a head group can round about one bf16 ulp differently than those heads do inside the whole tensor, and the sampler amplifies that into a different (not worse) video. Whether it happens depends on your attention backend and on the sequence length, so it is offered as a choice rather than guessed at.\nLeave it off to keep the exact same video you get without Low VRAM.",
-            "false", IgnoreIf: "false", FeatureFlag: LowVramFeatureId, Group: T2IParamTypes.GroupAdvancedSampling,
-            OrderPriority: 16.6, IsAdvanced: true, DependNonDefault: LowVram.Type.ID));
+            "false", IgnoreIf: "false", FeatureFlag: LowVramFeatureId, Group: T2IParamTypes.GroupCore,
+            OrderPriority: 20.1, DependNonDefault: LowVram.Type.ID));
         AudioOnly = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 Audio Only",
             "Generate only MiniMax H3's synchronized audio stream. The extension forces the otherwise-discarded video canvas to 32x32, skips video VAE decoding and video saving, and returns one lossless FLAC audio file. Text-only generation and optional image, video, or audio references are supported; in this mode an input video's soundtrack is decoded directly and its frames are never used.",
