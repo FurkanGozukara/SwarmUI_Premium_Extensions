@@ -27,17 +27,22 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<double> SpeedCacheThreshold;
     private static T2IRegisteredParam<string> SpeedSparseAttention;
     private static T2IRegisteredParam<bool> AudioOnly;
+    private static T2IRegisteredParam<bool> LowVram;
+    private static T2IRegisteredParam<bool> LowVramMaxSaving;
 
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3SpeedOptimizer node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string SpeedFeatureId = "minimax_h3_speed";
+
+    /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3LowVRAM node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
+    public const string LowVramFeatureId = "minimax_h3_low_vram";
 
     /// <summary>This extension is installed by the SECourses updater rather than a git clone, so metadata is set directly instead of read from git.</summary>
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, and the NVlabs Sana sol-engine 4x speed optimizations with a one-click core parameter.";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, and an exact-math low VRAM mode, each with a one-click core parameter.";
         License = "MIT";
-        Version = "1.8.0";
+        Version = "1.9.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -52,8 +57,9 @@ public class MiniMaxH3ReferencesExtension : Extension
 
         ScriptFiles.Add("Assets/minimax_h3_prompt_references.js");
         StyleSheetFiles.Add("Assets/minimax_h3_prompt_references.css");
-        // Advertise the speed feature only when the backend actually has the optimizer node.
+        // Advertise these features only when the backend actually has the matching node.
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3SpeedOptimizer"] = SpeedFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3LowVRAM"] = LowVramFeatureId;
         RegisterParameters();
         // Audio-only H3 intentionally uses a 32px disposable video stream and
         // supports the native H3 frame range beyond SwarmUI's generic video cap.
@@ -65,6 +71,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(ApplyAudioOnlyCanvas, -7.8);
         WorkflowGenerator.AddModelGenStep(ApplyAudioOnlyModelRouting, -3.6);
         WorkflowGenerator.AddModelGenStep(ApplySpeedOptimizations, -3.5);
+        // after the speed nodes, so the low VRAM patches wrap the already-optimized model
+        WorkflowGenerator.AddModelGenStep(ApplyLowVramOptimizations, -3.4);
         WorkflowGenerator.AddStep(ExtractAudioOnly, 0.9);
         WorkflowGenerator.AddStep(SaveAudioOnlyLossless, 9.9);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
@@ -119,6 +127,17 @@ public class MiniMaxH3ReferencesExtension : Extension
             "Sol-Attn sparse attention mode for the MiniMax H3 4x Speed parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
             "auto", GetValues: _ => ["auto", "enabled", "disabled"], IsAdvanced: true,
             FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 16.5));
+        // Sits at the bottom of the Core Parameters group (everything else there is negative).
+        LowVram = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 Low VRAM",
+            "Reduce the peak VRAM of the MiniMax H3 transformer, so a resolution or duration that runs out of memory can still generate.\nYour video does not change. The big attention buffers are released at their last use and the feedforward runs in token chunks; rows are independent and the INT8 quantizer works per row, so the result is bit-for-bit identical, verified end-to-end.\nIt does not cost speed either: the smaller working set keeps more of each matmul in cache, which offsets the extra kernel launches.\nStacks with MiniMax H3 4x Speed. Leave it off if your generations already fit.",
+            "false", IgnoreIf: "false", FeatureFlag: LowVramFeatureId, Group: T2IParamTypes.GroupCore,
+            OrderPriority: 20, ChangeWeight: 2));
+        LowVramMaxSaving = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 Low VRAM Max Saving",
+            "Also split MiniMax H3's attention into head groups, taking the peak VRAM reduction to roughly 40% instead of around 15%.\nThis part is not output-preserving. Heads are mathematically independent, but an attention kernel picks its tiling and quantization scales from the tensor it is handed, so a head group can round about one bf16 ulp differently than those heads do inside the whole tensor, and the sampler amplifies that into a different (not worse) video. Whether it happens depends on your attention backend and on the sequence length, so it is offered as a choice rather than guessed at.\nLeave it off to keep the exact same video you get without Low VRAM.",
+            "false", IgnoreIf: "false", FeatureFlag: LowVramFeatureId, Group: T2IParamTypes.GroupAdvancedSampling,
+            OrderPriority: 16.6, IsAdvanced: true, DependNonDefault: LowVram.Type.ID));
         AudioOnly = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 Audio Only",
             "Generate only MiniMax H3's synchronized audio stream. The extension forces the otherwise-discarded video canvas to 32x32, skips video VAE decoding and video saving, and returns one lossless FLAC audio file. Text-only generation and optional image, video, or audio references are supported; in this mode an input video's soundtrack is decoded directly and its frames are never used.",
@@ -265,6 +284,32 @@ public class MiniMaxH3ReferencesExtension : Extension
             g.LoadingVAE = [vaeSpeed, 0];
         }
         Logs.Info($"MiniMax H3 4x Speed enabled (cache threshold {threshold}, sparse attention {sparse}).");
+    }
+
+    /// <summary>Model-gen step: wrap the loaded MiniMax H3 model with the exact-math low VRAM node.</summary>
+    private static void ApplyLowVramOptimizations(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(LowVram, false) || !g.IsMiniMaxH3())
+        {
+            return;
+        }
+        if (!g.Features.Contains(LowVramFeatureId))
+        {
+            Logs.Warning("MiniMax H3 Low VRAM was requested but the backend does not have the MiniMaxH3LowVRAM node. Update the ComfyUI-TeaCache node package.");
+            return;
+        }
+        bool exact = !g.UserInput.Get(LowVramMaxSaving, false);
+        string lowVram = g.CreateNode("MiniMaxH3LowVRAM", new JObject()
+        {
+            ["model"] = g.LoadingModel,
+            ["enable_low_vram"] = true,
+            ["exact_output"] = exact,
+            ["attention_head_groups"] = 8,
+            ["feedforward_chunks"] = 4,
+            ["min_tokens"] = 4096
+        });
+        g.LoadingModel = [lowVram, 0];
+        Logs.Info($"MiniMax H3 Low VRAM enabled ({(exact ? "exact output only" : "maximum saving, attention head grouping allowed to change the result")}).");
     }
 
     private static void ApplyReferences(WorkflowGenerator g)

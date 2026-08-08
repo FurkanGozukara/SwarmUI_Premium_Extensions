@@ -1456,26 +1456,28 @@ class MiniMaxH3PromptReferences {
 let minimaxH3PromptReferences = new MiniMaxH3PromptReferences();
 sessionReadyCallbacks.push(() => minimaxH3PromptReferences.register());
 
-/** MiniMax H3 4x Speed core parameter: the backend advertises 'minimax_h3_speed' when the
- * MiniMaxH3SpeedOptimizer node is installed; this changer keeps the parameter visible only
- * while a MiniMax H3 architecture model is actually selected. */
-let minimaxH3SpeedBackendHasNode = null;
+/** MiniMax H3 core parameters backed by an optional ComfyUI node: the backend advertises the
+ * feature when the node is installed, and these changers keep the matching parameter visible
+ * only while a MiniMax H3 architecture model is actually selected. */
+let minimaxH3NodeFeatureSeen = {};
+function minimaxH3NodeGatedFeature(flag) {
+    let present = currentBackendFeatureSet.includes(flag);
+    if (!(flag in minimaxH3NodeFeatureSeen)) {
+        minimaxH3NodeFeatureSeen[flag] = present;
+    }
+    else if (!minimaxH3NodeFeatureSeen[flag] && present) {
+        minimaxH3NodeFeatureSeen[flag] = true;
+    }
+    if (!minimaxH3NodeFeatureSeen[flag]) {
+        return [[], []];
+    }
+    let compat = typeof currentModelHelper != 'undefined' ? currentModelHelper.curCompatClass : null;
+    if (compat && compat.startsWith('minimax-h3')) {
+        return [[flag], []];
+    }
+    return [[], [flag]];
+}
 if (typeof featureSetChangers != 'undefined') {
-    featureSetChangers.push(() => {
-        let present = currentBackendFeatureSet.includes('minimax_h3_speed');
-        if (minimaxH3SpeedBackendHasNode === null) {
-            minimaxH3SpeedBackendHasNode = present;
-        }
-        else if (!minimaxH3SpeedBackendHasNode && present) {
-            minimaxH3SpeedBackendHasNode = true;
-        }
-        if (!minimaxH3SpeedBackendHasNode) {
-            return [[], []];
-        }
-        let compat = typeof currentModelHelper != 'undefined' ? currentModelHelper.curCompatClass : null;
-        if (compat && compat.startsWith('minimax-h3')) {
-            return [['minimax_h3_speed'], []];
-        }
-        return [[], ['minimax_h3_speed']];
-    });
+    featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_speed'));
+    featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_low_vram'));
 }

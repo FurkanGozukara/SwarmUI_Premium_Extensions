@@ -24,6 +24,34 @@ Threshold** (default 0.08, the NVlabs-advertised near-lossless policy; higher sk
 aggressively) and **MiniMax H3 Speed Sparse
 Attention** (`auto` / `enabled` / `disabled`).
 
+## MiniMax H3 Low VRAM (Core Parameters checkbox)
+
+Since v1.9.0 a **MiniMax H3 Low VRAM** checkbox sits at the bottom of Core Parameters, on the
+same visibility rule: a MiniMax H3 model selected *and* the `MiniMaxH3LowVRAM` node present on
+the backend. It is off by default; switch it on when a resolution or duration otherwise runs
+out of memory.
+
+It releases the fused qkv buffer and the normed block input at their last use and runs the
+feedforward in token chunks. Unlike the speed parameter this changes nothing about the
+result: feedforward rows are independent and the INT8 activation quantizer works per row, so
+the output is bit-for-bit identical — verified end-to-end, where a full generation with it on
+decoded to pixel-identical and audio-identical output. It is not slower either, since the
+smaller working set keeps more of each matmul in cache. It stacks with **MiniMax H3 4x
+Speed**.
+
+Measured on one real-geometry H3 block at 38k packed tokens on an RTX 5090: 3.84 GB peak
+unpatched, 3.30 GB with this on.
+
+**MiniMax H3 Low VRAM Max Saving** (under *Advanced Sampling*) additionally splits attention
+into head groups, taking the same measurement down to 2.25 GB — roughly 40% instead of 15%.
+That part is not output-preserving: heads are mathematically independent, but an attention
+kernel picks its tiling and quantization scales from the tensor it is handed, so a head group
+can round about one bf16 ulp differently than those heads do inside the whole tensor, and a
+diffusion sampler amplifies that into a different — not worse — video. Whether it happens
+depends on the backend *and* the sequence length (SageAttention measured exact up to 8k
+tokens and not at 16k; xformers was the reverse), which is why it is an explicit choice
+rather than something the extension guesses at.
+
 ## Audio-only quality mode
 
 **MiniMax H3 Audio Only** uses the model's minimum 32x32 disposable video canvas,
