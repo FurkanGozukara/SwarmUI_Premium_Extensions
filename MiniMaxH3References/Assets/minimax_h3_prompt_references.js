@@ -34,6 +34,21 @@ function minimaxH3EscapeText(text) {
         .replaceAll('"', '&quot;').replaceAll("'", '&#039;');
 }
 
+/** Gives backend file payloads an ASCII-only, cross-platform name while the UI keeps the original name. */
+function minimaxH3StorageFilename(filename) {
+    let words = new Uint32Array(4);
+    if (globalThis.crypto?.getRandomValues) {
+        globalThis.crypto.getRandomValues(words);
+    }
+    else {
+        words[0] = Date.now();
+        words[1] = Math.random() * 0xffffffff;
+    }
+    let id = Array.from(words, word => word.toString(16).padStart(8, '0')).join('');
+    let extension = /\.([a-zA-Z0-9]{1,10})$/.exec(String(filename))?.[1]?.toLowerCase();
+    return `minimax-h3-reference-${id}${extension ? `.${extension}` : ''}`;
+}
+
 class MiniMaxH3PromptReferences {
     constructor() {
         this.maxImages = 9;
@@ -396,15 +411,16 @@ class MiniMaxH3PromptReferences {
                 continue;
             }
             let data = await this.readFile(file);
+            let storageFilename = minimaxH3StorageFilename(file.name);
             if (type === 'image') {
                 // A small thumbnail keeps the card (and its drag ghost, and every
                 // DOM move) light; the full-resolution data URL only lives in
                 // dataset.filedata for the generation request.
                 let preview = await this.makeImageThumbnail(file);
-                this.addImage(data, file.name, preview);
+                this.addImage(data, file.name, preview, storageFilename);
             }
             else {
-                this.addMedia(data, file.name, type, URL.createObjectURL(file));
+                this.addMedia(data, file.name, type, URL.createObjectURL(file), storageFilename);
             }
         }
         this.syncAll();
@@ -422,10 +438,11 @@ class MiniMaxH3PromptReferences {
         });
     }
 
-    addImage(data, filename, preview = null) {
+    addImage(data, filename, preview = null, storageFilename = minimaxH3StorageFilename(filename)) {
         let container = document.createElement('div');
         container.className = 'alt-prompt-image-container';
         container.dataset.filename = filename;
+        container.dataset.storageFilename = storageFilename;
 
         let remove = document.createElement('button');
         remove.type = 'button';
@@ -442,19 +459,20 @@ class MiniMaxH3PromptReferences {
         image.height = 128;
         image.className = 'alt-prompt-image';
         image.dataset.filedata = data;
-        image.dataset.filename = filename;
+        image.dataset.filename = storageFilename;
         container.append(remove, image);
         this.referenceArea.appendChild(container);
         this.showReferenceArea();
         showRevisionInputs(true);
     }
 
-    addMedia(data, filename, type, preview = null) {
+    addMedia(data, filename, type, preview = null, storageFilename = minimaxH3StorageFilename(filename)) {
         let container = document.createElement('div');
         container.className = 'minimax-h3-prompt-reference';
         container.dataset.referenceType = type;
         container.dataset.filedata = data;
         container.dataset.filename = filename;
+        container.dataset.storageFilename = storageFilename;
 
         let remove = document.createElement('button');
         remove.type = 'button';
@@ -986,8 +1004,9 @@ class MiniMaxH3PromptReferences {
                 if (input.dataset.filedata !== reference.dataset.filedata) {
                     input.dataset.filedata = reference.dataset.filedata;
                 }
-                if (input.dataset.filename !== reference.dataset.filename) {
-                    input.dataset.filename = reference.dataset.filename;
+                let storageFilename = reference.dataset.storageFilename || reference.dataset.filename;
+                if (input.dataset.filename !== storageFilename) {
+                    input.dataset.filename = storageFilename;
                 }
                 input.dataset.has_data = 'true';
             }
@@ -1433,7 +1452,8 @@ class MiniMaxH3PromptReferences {
             else {
                 this.ensureEnabled();
                 let data = await this.readFile(popup.file);
-                let container = this.addMedia(data, popup.file.name, 'video', URL.createObjectURL(popup.file));
+                let container = this.addMedia(data, popup.file.name, 'video', URL.createObjectURL(popup.file),
+                    minimaxH3StorageFilename(popup.file.name));
                 container.dataset.trimStart = `${Math.round(popup.start * 1000) / 1000}`;
                 container.dataset.trimEnd = `${Math.round(popup.end * 1000) / 1000}`;
                 let badge = document.createElement('span');
