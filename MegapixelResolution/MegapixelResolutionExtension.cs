@@ -14,9 +14,9 @@ public class MegapixelResolutionExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds a megapixel slider that selects an aspect-aware image resolution.";
+        Description = "Adds a megapixel slider and live diagram for aspect-aware image resolutions.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.1.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/MegapixelResolution";
     }
 
@@ -37,6 +37,7 @@ public class MegapixelResolutionExtension : Extension
 
         T2IParamInput.SpecialParameterHandlers.Add(ApplyMegapixelResolution);
         ScriptFiles.Add("Assets/megapixel_resolution.js");
+        StyleSheetFiles.Add("Assets/megapixel_resolution_preview.css");
     }
 
     private static void ApplyMegapixelResolution(T2IParamInput input)

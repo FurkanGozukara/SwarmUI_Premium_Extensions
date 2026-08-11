@@ -8,3 +8,8 @@ The control uses the selected model's resolution precision and shows the final
 rounded dimensions in SwarmUI's existing Resolution header. Adjusting Width,
 Height, or Side Length turns Megapixels off, so the most recently edited sizing
 mode always wins.
+
+A responsive diagram below the controls shows the selected aspect, exact width,
+height, total pixel count, and actual rounded megapixel count. It updates one
+second after resolution editing stops, keeping slider and typing interactions
+steady.
