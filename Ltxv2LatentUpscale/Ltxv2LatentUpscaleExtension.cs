@@ -34,7 +34,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds LTXV2 latent upscaling and native LTX 2.3 Foley video-to-audio generation.";
         License = "MIT";
-        Version = "0.8.1";
+        Version = "0.8.2";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -591,7 +591,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
             Steps = videoSteps,
             Seed = seed,
             ContextID = T2IParamInput.SectionID_Video,
-            VideoEndFrame = g.UserInput.Get(T2IParamTypes.VideoEndFrame, null)
+            VideoEndImage = g.UserInput.Get(T2IParamTypes.VideoEndImage, null)
         };
 
         string scaledImage = g.CreateNode("ImageScale", new JObject()
