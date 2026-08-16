@@ -53,6 +53,35 @@ depends on the backend *and* the sequence length (SageAttention measured exact u
 tokens and not at 16k; xformers was the reverse), which is why it is an explicit choice
 rather than something the extension guesses at.
 
+## Video Face Inpainting (parameter group)
+
+Since v1.10.0 a **Video Face Inpainting** group appears between Core Parameters and Text To
+Video whenever a MiniMax H3 model is selected and the backend has the MiniMax H3 face nodes
+(`MiniMaxH3FaceStitch` and friends from FurkanGozukara/ComfyUI-TeaCache). It is off by default
+and costs nothing while off.
+
+Turn on **Video Face Inpainting** and the extension appends the same second pass the SECourses
+ComfyUI presets ship: a YOLO face model (`Face Inpaint Detector`, default
+`yolov9e-face-lindevs.pt` from `Models/yolov8`) tracks the subject's face in every decoded
+frame, the crops are regenerated on a 384-768 px canvas with the same H3 model as img2img
+(**Face Inpaint Denoise**, default `0.55`; the main pass's audio latent is copied and frozen so
+speech and lipsync are untouched), and the result is stitched back with feathered,
+colour-matched blending. The main prompt is reused with an identity-preserving detail clause,
+and when MiniMax H3 References are attached the face pass is conditioned on the same references.
+
+- **Face Inpaint Geometry Lock** (default on): re-aligns each regenerated crop onto the source
+  face with dense optical flow before pasting, which removes the slight per-frame shaking /
+  tilting the face pass otherwise introduces while keeping the regenerated detail.
+- **Face Inpaint Size Aware Stitch** (default on): full refinement for faces up to 60 px,
+  fade to the source between 60-180 px, original pixels at 180 px and above.
+- **Face Inpaint Size Scaled Denoise** (default off) with editable start/end multipliers.
+- Steps, sampler, scheduler, detection confidence, crop factor, canvas mode and identity
+  tracking match the preset defaults (`20`, `res_multistep`, `simple`, `0.35`, `2.2`,
+  `auto_capped_768`, on).
+
+The group is designed to host other video architectures later; today it errors clearly when
+enabled with a non-H3 model.
+
 ## Audio-only quality mode
 
 **MiniMax H3 Audio Only** uses the model's minimum 32x32 disposable video canvas,
