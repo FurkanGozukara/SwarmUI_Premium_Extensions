@@ -55,7 +55,7 @@ rather than something the extension guesses at.
 
 ## Video Face Inpainting (parameter group)
 
-Since v1.10.0 a **Video Face Inpainting** group appears between Core Parameters and Text To
+Since v1.10.0 (faces selection since v1.11.0) a **Video Face Inpainting** group appears between Core Parameters and Text To
 Video whenever a MiniMax H3 model is selected and the backend has the MiniMax H3 face nodes
 (`MiniMaxH3FaceStitch` and friends from FurkanGozukara/ComfyUI-TeaCache). It is off by default
 and costs nothing while off.
@@ -69,6 +69,12 @@ speech and lipsync are untouched), and the result is stitched back with feathere
 colour-matched blending. The main prompt is reused with an identity-preserving detail clause,
 and when MiniMax H3 References are attached the face pass is conditioned on the same references.
 
+- **Face Inpaint Faces** (default `1`): which faces to refine. Faces are ranked by size - `1` = the biggest face
+  in the clip (average detected face height over the whole clip; ties go to the face on screen longer), `2` = the
+  second biggest, ... `1` behaves exactly like before, `2` refines only the second biggest, `1,3` faces 1 and 3, `all`
+  every detected face. Spaces, `;` and case do not matter; missing ranks are skipped. Each selected face is refined in
+  its own pass (time scales with the count), and a hallucination guard keeps neighbours' faces and any face H3 invents at
+  their original pixels (frames where H3 rewrote the head are not pasted).
 - **Face Inpaint Geometry Lock** (default on): re-aligns each regenerated crop onto the source
   face with dense optical flow before pasting, which removes the slight per-frame shaking /
   tilting the face pass otherwise introduces while keeping the regenerated detail.

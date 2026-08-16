@@ -34,7 +34,7 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<bool> FaceInpaint, FaceTracking, FaceSizeScaling, FaceSizeAwareStitch, FaceGeometryLock;
     private static T2IRegisteredParam<double> FaceDenoise, FaceConfidence, FaceCropFactor, FaceScaleStart, FaceScaleEnd;
     private static T2IRegisteredParam<int> FaceSteps;
-    private static T2IRegisteredParam<string> FaceSampler, FaceScheduler, FaceDetector, FaceCanvasMode;
+    private static T2IRegisteredParam<string> FaceSampler, FaceScheduler, FaceDetector, FaceCanvasMode, FaceFaces;
 
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3SpeedOptimizer node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string SpeedFeatureId = "minimax_h3_speed";
@@ -52,9 +52,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking, H3 img2img face regeneration with locked audio, geometry-locked stitching), each with a one-click parameter.";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter.";
         License = "MIT";
-        Version = "1.10.0";
+        Version = "1.11.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -230,6 +230,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         FaceInpaint = Reg<bool>("Video Face Inpainting", "Enable the face refinement pass. Requires a MiniMax H3 model and the ComfyUI-TeaCache face nodes on the backend. Adds roughly the cost of a second (face-sized) H3 generation.", "false", -10);
         dep = FaceInpaint.Type.ID;
         FaceDenoise = Reg<double>("Face Inpaint Denoise", "Face-pass denoise. 0.55 is the tested default: enough to add real skin/eye/beard detail while keeping identity. Lower (0.35-0.45) stays closer to the source, higher (0.60+) drifts more.", "0.55", -9, 0, 1, 0.01);
+        FaceFaces = Reg<string>("Face Inpaint Faces", "Which face(s) to refine. Faces are ranked by size: 1 = the biggest face in the clip, 2 = the second biggest, 3 = the third, and so on. The rank is the average detected face height across the whole clip (ties go to the face that is on screen longer), so it does not change from frame to frame.\n'1' (default) = the main subject, exactly as before.  '2' = only the second biggest face.  '1,3' = faces 1 and 3.  'all' = every detected face.\nSpaces, ';' and upper/lower case do not matter (' 1, 3 ', 'ALL', 'All'); other text is ignored, and a rank that does not exist in the clip is skipped (a clip with two faces and '1,3' refines face 1 only; if none of the requested faces exist the generation stops with a clear message).\nEvery selected face is refined in its own pass, so time grows with the count. Only the selected faces change; a hallucination guard keeps neighbours' faces and any face H3 invents at their original pixels.", "1", -8.95);
         FaceGeometryLock = Reg<bool>("Face Inpaint Geometry Lock", "Re-align every regenerated face crop onto the source face with dense optical flow before pasting, so eyes/nose/mouth stay exactly where the source video has them. Removes the slight per-frame shaking / tilting the face pass otherwise introduces (about 60% less relative face motion measured at 0.55 denoise) while keeping all regenerated detail. Turn off to paste the raw regenerated crop.", "true", -8.9);
         FaceSizeAwareStitch = Reg<bool>("Face Inpaint Size Aware Stitch", "Use the regenerated face fully for faces up to 60 px tall, fade toward the source between 60-180 px, and keep the original pixels at 180 px and above (a detailed close-up already has more real detail than a VAE round trip). Turn off to keep the regenerated face at full strength regardless of face size.", "true", -8.8);
         FaceSizeScaling = Reg<bool>("Face Inpaint Size Scaled Denoise", "Off (default): every frame uses the constant face-pass denoise. On: the effective denoise is scaled by detected face size, from the start multiplier for faces at/below 60 px to the end multiplier for faces at/above 150 px, so close-ups change less.", "false", -8.7);
@@ -319,7 +320,8 @@ public class MiniMaxH3ReferencesExtension : Extension
             ["identity_threshold"] = 0.28,
             ["select"] = "largest",
             ["fallback_detector"] = "none",
-            ["fallback_head_frac"] = 0.5
+            ["fallback_head_frac"] = 0.5,
+            ["faces"] = g.UserInput.Get(FaceFaces, "1")
         });
         string facePrompt = g.CreateNode("MiniMaxH3FacePromptEnhance", new JObject()
         {
@@ -417,10 +419,11 @@ public class MiniMaxH3ReferencesExtension : Extension
             ["full_refine_face_px"] = 60.0,
             ["passthrough_face_px"] = 180.0,
             ["geometry_lock"] = g.UserInput.Get(FaceGeometryLock, true),
-            ["geometry_lock_strength"] = 1.0
+            ["geometry_lock_strength"] = 1.0,
+            ["suppress_other_faces"] = true
         });
         g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(stitch, 0));
-        Logs.Info($"MiniMax H3 Video Face Inpainting added (denoise {g.UserInput.Get(FaceDenoise, 0.55)}, geometry lock {g.UserInput.Get(FaceGeometryLock, true)}, size-aware stitch {g.UserInput.Get(FaceSizeAwareStitch, true)}, size scaling {g.UserInput.Get(FaceSizeScaling, false)}, {(condClass == "MiniMaxH3ReferenceToVideo" ? "reference" : "plain")} conditioning).");
+        Logs.Info($"MiniMax H3 Video Face Inpainting added (faces '{g.UserInput.Get(FaceFaces, "1")}', denoise {g.UserInput.Get(FaceDenoise, 0.55)}, geometry lock {g.UserInput.Get(FaceGeometryLock, true)}, size-aware stitch {g.UserInput.Get(FaceSizeAwareStitch, true)}, size scaling {g.UserInput.Get(FaceSizeScaling, false)}, {(condClass == "MiniMaxH3ReferenceToVideo" ? "reference" : "plain")} conditioning).");
     }
 
     /// <summary>Use FL2VA for text-only audio and Ref2VA only when this request has attachments.</summary>
