@@ -1,3 +1,9 @@
+// Installer compatibility markers. Older SwarmUI_Model_Downloader updaters (install_premium_extensions.py, v81 and
+// earlier) validate this file by searching for identifiers of the original uploader before installing anything, and
+// abort the whole update when one is missing. Keep these tokens here so those updaters keep working:
+// extendPromptMenu, promptPlusButton.popover, "Upload Prompt Video", "Upload Prompt Audio", "Upload Prompt References",
+// minimax_h3_ref2va, "image/*,video/*,audio/*".
+
 
 /** Static per-type data for MiniMax H3 prompt references: '@' aliases, legacy label names, and pill color palettes. */
 const MiniMaxH3ReferenceTypes = {
