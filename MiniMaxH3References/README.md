@@ -3,6 +3,31 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Init Audio (parameter group, above Init Image)
+
+Since v1.12.0 an **Init Audio** group sits directly above **Init Image**. Upload or select one
+soundtrack there and MiniMax H3 keeps that audio **exactly** as the video's audio track while it
+generates the picture to match it: lipsync, action timing, ambience. It is the same idea as an
+optional init image and it is *not* an audio reference: nothing has to be mentioned in the prompt,
+just describe who speaks and how (eg *the woman speaks the words we hear, natural lip movements*);
+the words themselves come from the audio.
+
+- Works with a text-only prompt (FL2VA), with **MiniMax H3 References** (Ref2VA), and with the
+  **Init Image + Image To Video** flow when the Video Model is a MiniMax H3 model (set Init Image
+  Creativity to 0 as usual). It also stacks with 4x Speed, Low VRAM, and Video Face Inpainting (the
+  face pass keeps the same locked audio).
+- **Init Audio Match Duration** (default on) makes the video as long as the audio, rounded up to the
+  model's 17k+5 frame grid at 24 FPS, ignoring Text2Video Frames / Video Frames. Turn it off to keep
+  your own frame count: longer audio is cut, shorter audio is padded with silence.
+- Behind the scenes the extension uses the `SECoursesMiniMaxH3InitAudio` node from
+  [FurkanGozukara/FoleyExtension](https://github.com/FurkanGozukara/FoleyExtension): the soundtrack
+  is encoded once with the audio VAE, locked into the joint audio/video latent with a nested noise
+  mask (video is denoised, audio is kept exact at every step) and given to the model as a clean t=1.0
+  audio guide through ComfyUI's native MiniMax H3 guide mechanism, mirroring the
+  `multimodalart/minimax-h3-audio-to-video` Space. The saved MP4 carries your original audio
+  (normalized to 32 kHz stereo) rather than a VAE round trip. The group is designed to host other
+  audio-video architectures later; with a non-H3 model it errors clearly.
+
 ## MiniMax H3 4x Speed (Core Parameters checkbox)
 
 Since v1.4.0 the extension also adds a **MiniMax H3 4x Speed** checkbox to SwarmUI's Core

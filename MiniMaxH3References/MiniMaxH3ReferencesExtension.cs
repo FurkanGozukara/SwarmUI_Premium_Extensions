@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
@@ -35,6 +37,24 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<double> FaceDenoise, FaceConfidence, FaceCropFactor, FaceScaleStart, FaceScaleEnd;
     private static T2IRegisteredParam<int> FaceSteps;
     private static T2IRegisteredParam<string> FaceSampler, FaceScheduler, FaceDetector, FaceCanvasMode, FaceFaces;
+    // Init Audio group (an optional soundtrack the video must follow; MiniMax H3 today, other audio-video architectures later)
+    private static T2IRegisteredParam<AudioFile> InitAudio;
+    private static T2IRegisteredParam<bool> InitAudioMatchDuration;
+
+    /// <summary>Feature id advertised when the ComfyUI backend has the SECoursesMiniMaxH3InitAudio node (shipped by FurkanGozukara/FoleyExtension).</summary>
+    public const string InitAudioFeatureId = "minimax_h3_init_audio";
+
+    /// <summary>The audio_conditioning mode of SECoursesMiniMaxH3InitAudio: exact soundtrack plus a clean t=1.0 audio guide (same default as the ComfyUI presets).</summary>
+    public const string InitAudioConditioning = "lock soundtrack + guide";
+
+    /// <summary>Per-generation record of the init audio nodes, so the output soundtrack swap and the face pass can find them.</summary>
+    private sealed class InitAudioState
+    {
+        public string ConditioningNode;
+        public string FramesNode;
+    }
+
+    private static readonly ConditionalWeakTable<WorkflowGenerator, InitAudioState> InitAudioStates = new();
 
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3SpeedOptimizer node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string SpeedFeatureId = "minimax_h3_speed";
@@ -52,9 +72,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter.";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation.";
         License = "MIT";
-        Version = "1.11.0";
+        Version = "1.12.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -73,8 +93,10 @@ public class MiniMaxH3ReferencesExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3SpeedOptimizer"] = SpeedFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3LowVRAM"] = LowVramFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3FaceStitch"] = FaceInpaintFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["SECoursesMiniMaxH3InitAudio"] = InitAudioFeatureId;
         RegisterParameters();
         RegisterFaceInpaintParameters();
+        RegisterInitAudioParameters();
         // Audio-only H3 intentionally uses a 32px disposable video stream and
         // supports the native H3 frame range beyond SwarmUI's generic video cap.
         // Provide those relaxed types only while Audio Only is enabled, and parse
@@ -87,10 +109,16 @@ public class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddModelGenStep(ApplySpeedOptimizations, -3.5);
         // after the speed nodes, so the low VRAM patches wrap the already-optimized model
         WorkflowGenerator.AddModelGenStep(ApplyLowVramOptimizations, -3.4);
+        // right before the base sampler (-5): condition a MiniMax H3 text/reference generation on the init audio
+        WorkflowGenerator.AddStep(ApplyInitAudioTextToVideo, -5.1);
+        // the Image To Video pass builds its own conditioning inside CreateImageToVideo, hook it there
+        WorkflowGenerator.AltImageToVideoPostHandlers.Add(ApplyInitAudioImageToVideo);
         WorkflowGenerator.AddStep(ExtractAudioOnly, 0.9);
         // after the video decode (1), before segmentation/save (5, 10): refine faces on the decoded frames
         WorkflowGenerator.AddStep(ApplyVideoFaceInpaint, 4.5);
         WorkflowGenerator.AddStep(SaveAudioOnlyLossless, 9.9);
+        // after both the base (10) and Image To Video (11) saves: put the user's own audio on the file
+        WorkflowGenerator.AddStep(UseInitAudioAsOutputSoundtrack, 11.5);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
     }
@@ -246,6 +274,181 @@ public class MiniMaxH3ReferencesExtension : Extension
         FaceTracking = Reg<bool>("Face Inpaint Identity Tracking", "Hold one subject through crowds: continuity picks most frames and a face-identity embedding (InsightFace, when installed) resolves ambiguous ones. Off tracks the largest face only.", "true", -7.7);
     }
 
+    /// <summary>"Init Audio" group: sits directly above "Init Image" (-5). One optional soundtrack the generated video must follow.
+    /// MiniMax H3 is the first architecture behind it; other audio-video models can be added to the same parameters later.</summary>
+    private static void RegisterInitAudioParameters()
+    {
+        T2IParamGroup group = new("Init Audio", Open: false, OrderPriority: -5.5,
+            Description: "Optional init audio: a soundtrack the generated video must follow. MiniMax H3 keeps this audio exactly as the video's audio track and generates the picture to match it (lipsync, action timing, ambience). Works with text-only prompts, MiniMax H3 References, and Init Image / Image To Video with a MiniMax H3 video model. This is not an audio reference: nothing needs to be mentioned in the prompt, just describe who speaks and how.");
+        InitAudio = T2IParamTypes.Register<AudioFile>(new(
+            "Init Audio",
+            "Optional soundtrack the video must follow (wav, mp3, flac, ogg, aac). MiniMax H3 keeps it exactly as the output audio and generates the video to match it: lipsync, action timing, ambience.\nWorks with a text-only prompt, with MiniMax H3 References, and with Init Image + a MiniMax H3 Video Model. Describe who speaks and how in the prompt (eg 'the woman speaks the words we hear, natural lip movements'); the words themselves come from the audio. Do not also attach the same file as an @audio reference.",
+            null, FeatureFlag: InitAudioFeatureId, Group: group, OrderPriority: -10, ChangeWeight: 8));
+        InitAudioMatchDuration = T2IParamTypes.Register<bool>(new(
+            "Init Audio Match Duration",
+            "On (default): the video is as long as the init audio, rounded up to MiniMax H3's frame grid (17k+5 frames at 24 FPS); Text2Video Frames / Video Frames are ignored while an init audio is set.\nOff: keep your frame count; longer audio is cut and shorter audio is padded with silence.",
+            "true", IgnoreIf: "true", FeatureFlag: InitAudioFeatureId, Group: group, OrderPriority: -9, DependNonDefault: InitAudio.Type.ID));
+    }
+
+    private static bool IsMiniMaxH3Model(T2IModel model)
+    {
+        return model?.ModelClass?.CompatClass?.ID == T2IModelClassSorter.CompatMiniMaxH3.ID;
+    }
+
+    /// <summary>Base generation: condition a MiniMax H3 text / reference generation on the init audio (the Image To Video pass has its own hook).</summary>
+    private static void ApplyInitAudioTextToVideo(WorkflowGenerator g)
+    {
+        if (!g.UserInput.TryGet(InitAudio, out AudioFile audio))
+        {
+            return;
+        }
+        if (g.UserInput.Get(AudioOnly, false))
+        {
+            throw new SwarmUserErrorException("Init Audio cannot be combined with MiniMax H3 Audio Only (the output would just be the init audio). Remove one of them.");
+        }
+        bool videoModelIsH3 = g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel videoModel) && IsMiniMaxH3Model(videoModel);
+        if (!g.IsMiniMaxH3())
+        {
+            if (videoModelIsH3)
+            {
+                return; // applied inside the Image To Video pass
+            }
+            throw new SwarmUserErrorException("Init Audio currently supports MiniMax H3. Select a MiniMax H3 model (or a MiniMax H3 Video Model in the Image To Video group), or remove the Init Audio.");
+        }
+        if (g.CurrentMedia is null || g.CurrentMedia.DataType != WGNodeData.DT_LATENT_AUDIOVIDEO)
+        {
+            if (videoModelIsH3)
+            {
+                return; // eg Init Image with creativity 0 feeding a MiniMax H3 Video Model: the Image To Video pass applies it
+            }
+            throw new SwarmUserErrorException("Init Audio with an Init Image needs the Image To Video group: set Init Image Creativity to 0 and choose a MiniMax H3 Video Model there. For text-only generation remove the Init Image.");
+        }
+        if (g.CurrentAudioVae is null)
+        {
+            throw new SwarmReadableErrorException("Init Audio needs the MiniMax H3 audio VAE, but none was loaded.");
+        }
+        int fallbackFrames = WorkflowGenerator.MiniMaxH3AlignFrames(g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 124));
+        (JArray positive, JArray latent) = ConditionOnInitAudio(g, audio, g.FinalPrompt, g.CurrentMedia.Path, fallbackFrames);
+        g.FinalPrompt = positive;
+        g.CurrentMedia = g.CurrentMedia.WithPath(latent);
+        if (InitAudioStates.TryGetValue(g, out InitAudioState state) && state.FramesNode is not null)
+        {
+            g.CurrentMedia.Frames = null; // the frame count is now decided by the audio on the backend
+        }
+    }
+
+    /// <summary>Image To Video pass with a MiniMax H3 video model: condition it on the init audio before its sampler is created.</summary>
+    private static void ApplyInitAudioImageToVideo(WorkflowGenerator.ImageToVideoGenInfo genInfo)
+    {
+        WorkflowGenerator g = genInfo.Generator;
+        if (!g.UserInput.TryGet(InitAudio, out AudioFile audio) || !IsMiniMaxH3Model(genInfo.VideoModel))
+        {
+            return;
+        }
+        if (g.CurrentMedia is null || g.CurrentMedia.DataType != WGNodeData.DT_LATENT_AUDIOVIDEO)
+        {
+            throw new SwarmReadableErrorException($"Init Audio expected the MiniMax H3 audio/video latent of the Image To Video pass but found {g.CurrentMedia?.DataType}.");
+        }
+        if (g.CurrentAudioVae is null)
+        {
+            throw new SwarmReadableErrorException("Init Audio needs the MiniMax H3 audio VAE, but none was loaded for the Image To Video pass.");
+        }
+        int fallbackFrames = WorkflowGenerator.MiniMaxH3AlignFrames(genInfo.Frames ?? 124);
+        (JArray positive, JArray latent) = ConditionOnInitAudio(g, audio, genInfo.PosCond, g.CurrentMedia.Path, fallbackFrames);
+        genInfo.PosCond = positive;
+        g.CurrentMedia = g.CurrentMedia.WithPath(latent);
+        if (InitAudioStates.TryGetValue(g, out InitAudioState state) && state.FramesNode is not null)
+        {
+            g.CurrentMedia.Frames = null;
+        }
+    }
+
+    /// <summary>Creates the init audio nodes: the audio loader, optionally the frame count that follows the audio (retargeting every H3
+    /// length input), and SECoursesMiniMaxH3InitAudio between the given conditioning/latent and the sampler. Returns the new (positive, latent) paths.</summary>
+    private static (JArray Positive, JArray Latent) ConditionOnInitAudio(WorkflowGenerator g, AudioFile audio, JArray positive, JArray latent, int fallbackFrames)
+    {
+        if (!g.Features.Contains(InitAudioFeatureId))
+        {
+            throw new SwarmUserErrorException("Init Audio needs the SECoursesMiniMaxH3InitAudio node on the ComfyUI backend. Update the FoleyExtension node package.");
+        }
+        InitAudioState state = InitAudioStates.GetOrCreateValue(g);
+        string loaded = g.CreateAudioLoadNode(audio, "${initaudio}");
+        bool matchDuration = g.UserInput.Get(InitAudioMatchDuration, true);
+        if (matchDuration)
+        {
+            state.FramesNode = g.CreateNode("SECoursesMiniMaxH3AudioFrames", new JObject()
+            {
+                ["fallback_frames"] = fallbackFrames,
+                ["init_audio"] = WorkflowGenerator.NodePath(loaded, 0),
+                ["match_audio"] = true
+            });
+            int retargeted = 0;
+            foreach (string nodeClass in new[] { "EmptyMiniMaxH3LatentAV", "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo" })
+            {
+                g.RunOnNodesOfClass(nodeClass, (_, node) =>
+                {
+                    if (node["inputs"] is JObject inputs && inputs.ContainsKey("length"))
+                    {
+                        inputs["length"] = WorkflowGenerator.NodePath(state.FramesNode, 0);
+                        retargeted++;
+                    }
+                });
+            }
+            Logs.Debug($"Init Audio Match Duration retargeted {retargeted} MiniMax H3 length input(s) to the audio-driven frame count.");
+        }
+        state.ConditioningNode = g.CreateNode("SECoursesMiniMaxH3InitAudio", new JObject()
+        {
+            ["positive"] = positive,
+            ["latent"] = latent,
+            ["audio_vae"] = g.CurrentAudioVae.Path,
+            ["init_audio"] = WorkflowGenerator.NodePath(loaded, 0),
+            ["audio_conditioning"] = InitAudioConditioning
+        });
+        Logs.Info($"MiniMax H3 Init Audio attached ({(matchDuration ? "video length follows the audio" : $"{fallbackFrames} frames, audio cut or silence-padded")}, {InitAudioConditioning}).");
+        return (WorkflowGenerator.NodePath(state.ConditioningNode, 0), WorkflowGenerator.NodePath(state.ConditioningNode, 1));
+    }
+
+    /// <summary>The sampled audio latent is the init audio locked in place; put the user's own audio (normalized, cut to the video) on the file instead of a VAE round trip.</summary>
+    private static void UseInitAudioAsOutputSoundtrack(WorkflowGenerator g)
+    {
+        if (!InitAudioStates.TryGetValue(g, out InitAudioState state) || state.ConditioningNode is null)
+        {
+            return;
+        }
+        int replaced = 0;
+        g.RunOnNodesOfClass("SwarmSaveAnimationWS", (_, node) =>
+        {
+            if (node["inputs"] is not JObject inputs || inputs["audio"] is not JArray audioPath || !AudioComesFromInitAudioSampling(g, audioPath, state.ConditioningNode))
+            {
+                return;
+            }
+            inputs["audio"] = WorkflowGenerator.NodePath(state.ConditioningNode, 2);
+            replaced++;
+        });
+        if (replaced > 0)
+        {
+            Logs.Info($"MiniMax H3 Init Audio: {replaced} output video(s) carry the original init audio.");
+        }
+    }
+
+    /// <summary>True when an audio path is the decoded audio stream of a sampler that ran on the init audio latent
+    /// (SwarmSaveAnimationWS.audio &lt;- VAEDecodeAudio &lt;- LTXVSeparateAVLatent &lt;- sampler &lt;- SECoursesMiniMaxH3InitAudio latent).</summary>
+    private static bool AudioComesFromInitAudioSampling(WorkflowGenerator g, JArray audioPath, string conditioningNode)
+    {
+        JObject decode = g.Workflow[$"{audioPath[0]}"] as JObject;
+        if ($"{decode?["class_type"]}" != "VAEDecodeAudio" || decode["inputs"]?["samples"] is not JArray samples)
+        {
+            return false;
+        }
+        JObject separated = g.Workflow[$"{samples[0]}"] as JObject;
+        if ($"{separated?["class_type"]}" != "LTXVSeparateAVLatent" || separated["inputs"]?["av_latent"] is not JArray avLatent)
+        {
+            return false;
+        }
+        JObject sampler = g.Workflow[$"{avLatent[0]}"] as JObject;
+        return sampler?["inputs"]?["latent_image"] is JArray latentImage && latentImage.Count > 1 && $"{latentImage[0]}" == conditioningNode && $"{latentImage[1]}" == "1";
+    }
+
     /// <summary>Follow a node path upstream through image/latent links until a node of one of the wanted classes is found.</summary>
     private static (JObject Node, JArray Path) FindUpstream(WorkflowGenerator g, JArray path, params string[] classes)
     {
@@ -300,6 +503,9 @@ public class MiniMaxH3ReferencesExtension : Extension
         string condClass = $"{condNode?["class_type"]}";
         string prompt = condClass == "CLIPTextEncode" ? $"{condNode["inputs"]["text"]}" : condNode?["inputs"]?["prompt"] is JValue p ? $"{p}" : g.UserInput.Get(T2IParamTypes.Prompt, "");
         int frames = Math.Max(5, WorkflowGenerator.MiniMaxH3AlignFrames(g.UserInput.Get(T2IParamTypes.Text2VideoFrames, 124)));
+        // with Init Audio Match Duration the main pass length comes from the audio, follow the same node
+        JToken length = InitAudioStates.TryGetValue(g, out InitAudioState initAudioState) && initAudioState.FramesNode is not null
+            ? WorkflowGenerator.NodePath(initAudioState.FramesNode, 0) : frames;
         JArray images = g.CurrentMedia.Path;
         JArray model = g.CurrentModel.Path, vae = g.CurrentVae.Path;
 
@@ -336,7 +542,7 @@ public class MiniMaxH3ReferencesExtension : Extension
             refInputs["prompt"] = WorkflowGenerator.NodePath(facePrompt, 0);
             refInputs["width"] = WorkflowGenerator.NodePath(track, 4);
             refInputs["height"] = WorkflowGenerator.NodePath(track, 5);
-            refInputs["length"] = frames;
+            refInputs["length"] = length;
             cond = g.CreateNode("MiniMaxH3ReferenceToVideo", refInputs);
         }
         else
@@ -348,7 +554,7 @@ public class MiniMaxH3ReferencesExtension : Extension
                 ["prompt"] = WorkflowGenerator.NodePath(facePrompt, 0),
                 ["width"] = WorkflowGenerator.NodePath(track, 4),
                 ["height"] = WorkflowGenerator.NodePath(track, 5),
-                ["length"] = frames
+                ["length"] = length
             });
         }
         string inject = g.CreateNode("MiniMaxH3FaceInjectVideoLatent", new JObject()

@@ -1503,10 +1503,47 @@ function minimaxH3NodeGatedFeature(flag) {
     }
     return [[], [flag]];
 }
+/** True when the Image To Video group is enabled with a MiniMax H3 architecture video model (Init Image + Video Model flow). */
+function minimaxH3VideoModelSelected() {
+    try {
+        let select = document.getElementById('input_videomodel');
+        let toggle = document.getElementById('input_group_content_imagetovideo_toggle');
+        if (!select || !select.value || (toggle && !toggle.checked)) {
+            return false;
+        }
+        let data = typeof modelsHelpers != 'undefined' ? modelsHelpers.getDataFor('Stable-Diffusion', select.value) : null;
+        let compat = data?.compat_class ?? data?.modelClass?.compatClass?.id ?? '';
+        return `${compat}`.startsWith('minimax-h3');
+    }
+    catch (e) {
+        return false;
+    }
+}
+
+/** Init Audio: like the node-gated features above, but the group also applies to the Image To Video flow, so it stays
+ * visible while a MiniMax H3 video model is selected there even when the base model is an image model. */
+function minimaxH3InitAudioFeature() {
+    let flag = 'minimax_h3_init_audio';
+    let [add, remove] = minimaxH3NodeGatedFeature(flag);
+    if (remove.includes(flag) && minimaxH3VideoModelSelected()) {
+        return [[flag], []];
+    }
+    return [add, remove];
+}
+
 if (typeof featureSetChangers != 'undefined') {
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_speed'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_low_vram'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_face_inpaint'));
+    featureSetChangers.push(() => minimaxH3InitAudioFeature());
+    // re-evaluate when the Image To Video model or group toggle changes (the core only re-evaluates on base model
+    // changes); delegated so it also works when the parameter inputs are (re)built after this script loads
+    document.addEventListener('change', (event) => {
+        let id = event.target?.id;
+        if ((id == 'input_videomodel' || id == 'input_group_content_imagetovideo_toggle') && typeof reviseBackendFeatureSet == 'function') {
+            reviseBackendFeatureSet();
+        }
+    }, true);
 }
 
 /** Video Face Inpainting: keep the group's dependent parameters hidden until its enable checkbox is on
