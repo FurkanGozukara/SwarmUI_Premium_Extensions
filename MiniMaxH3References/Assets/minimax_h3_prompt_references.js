@@ -55,6 +55,387 @@ function minimaxH3StorageFilename(filename) {
     return `minimax-h3-reference-${id}${extension ? `.${extension}` : ''}`;
 }
 
+// ==================== Prompt token meter (generic; model estimators register below) ====================
+
+/** Probes browser-decodable media (data URLs / blob URLs) once per element: {width, height, duration} or null.
+ * Audio goes through the Web Audio decoder (works even while the tab is hidden); images and videos use an
+ * element, which Chrome may defer in a hidden tab, so a probe that has not answered within `timeoutMs`
+ * yields null now, keeps waiting in the background, and calls `onLate` when it finally resolves so the
+ * caller can re-estimate. Failed probes are not cached, so they are retried on the next refresh. */
+const promptMediaProbeCache = new WeakMap();
+const PROMPT_MEDIA_PROBE_PENDING = Symbol('pending');
+function startPromptMediaProbe(kind, source) {
+    if (kind === 'audio' && typeof AudioContext !== 'undefined' && /^(data|blob):/.test(source)) {
+        return (async () => {
+            let context = new AudioContext();
+            try {
+                let bytes = await (await fetch(source)).arrayBuffer();
+                let buffer = await context.decodeAudioData(bytes);
+                return { width: null, height: null, duration: buffer.duration };
+            }
+            catch (error) {
+                return null;
+            }
+            finally {
+                context.close().catch(() => {});
+            }
+        })();
+    }
+    return new Promise((resolve) => {
+        let done = false;
+        let finish = (value) => {
+            if (!done) {
+                done = true;
+                resolve(value);
+            }
+        };
+        let timer = setTimeout(() => finish(null), 45000);
+        if (kind === 'image') {
+            let image = new Image();
+            image.onload = () => { clearTimeout(timer); finish({ width: image.naturalWidth, height: image.naturalHeight, duration: null }); };
+            image.onerror = () => { clearTimeout(timer); finish(null); };
+            image.src = source;
+            return;
+        }
+        let media = document.createElement(kind === 'video' ? 'video' : 'audio');
+        media.preload = 'metadata';
+        media.muted = true;
+        media.onloadedmetadata = () => {
+            clearTimeout(timer);
+            let duration = Number.isFinite(media.duration) ? media.duration : null;
+            finish({ width: media.videoWidth || null, height: media.videoHeight || null, duration: duration });
+            media.removeAttribute('src');
+            media.load?.();
+        };
+        media.onerror = () => { clearTimeout(timer); finish(null); };
+        media.src = source;
+    });
+}
+function probePromptMedia(element, kind, source, timeoutMs = 4000, onLate = null) {
+    if (!element || !source) {
+        return Promise.resolve(null);
+    }
+    let entry = promptMediaProbeCache.get(element);
+    if (!entry || entry.source !== source) {
+        entry = { source: source, result: undefined, promise: null };
+        entry.promise = startPromptMediaProbe(kind, source).then((result) => {
+            entry.result = result;
+            if (result === null && promptMediaProbeCache.get(element) === entry) {
+                promptMediaProbeCache.delete(element); // retry next time (eg the tab became visible)
+            }
+            return result;
+        });
+        promptMediaProbeCache.set(element, entry);
+    }
+    if (entry.result !== undefined) {
+        return Promise.resolve(entry.result);
+    }
+    let pending = new Promise((resolve) => setTimeout(() => resolve(PROMPT_MEDIA_PROBE_PENDING), timeoutMs));
+    return Promise.race([entry.promise, pending]).then((value) => {
+        if (value !== PROMPT_MEDIA_PROBE_PENDING) {
+            return value;
+        }
+        if (onLate) {
+            entry.promise.then(() => onLate(), () => onLate());
+        }
+        return null;
+    });
+}
+
+/** Typed value of a generation parameter as the generate request would carry it: null when the input is
+ * absent, toggled off, in a disabled group, or otherwise not sent (mirrors SwarmUI's isParamEnabled / getInputVal). */
+function promptParamValue(id) {
+    let elem = document.getElementById(`input_${id}`);
+    if (!elem) {
+        return null;
+    }
+    let param = typeof gen_param_types !== 'undefined' ? gen_param_types.find(p => p.id === id) : null;
+    if (param && typeof isParamEnabled === 'function') {
+        try {
+            if (!isParamEnabled(param)) {
+                return null;
+            }
+        }
+        catch (error) {
+            // fall through to the local checks
+        }
+    }
+    else {
+        let toggle = document.getElementById(`input_${id}_toggle`);
+        if (toggle && !toggle.checked) {
+            return null;
+        }
+    }
+    let value = typeof getInputVal === 'function' ? getInputVal(elem) : (elem.type === 'checkbox' ? elem.checked : elem.value);
+    if (elem.type === 'number' || elem.type === 'range') {
+        let number = parseFloat(value);
+        return Number.isFinite(number) ? number : null;
+    }
+    return value;
+}
+
+/** Compact "current / budget" token readout: a filled bar behind a label, breakdown in the tooltip. */
+class PromptTokenMeter {
+    constructor() {
+        this.root = document.createElement('span');
+        this.root.className = 'secourses-token-meter';
+        this.root.setAttribute('role', 'status');
+        this.root.dataset.level = 'none';
+        this.bar = document.createElement('span');
+        this.bar.className = 'secourses-token-meter-bar';
+        this.text = document.createElement('span');
+        this.text.className = 'secourses-token-meter-text';
+        this.detail = document.createElement('span');
+        this.detail.className = 'secourses-token-meter-detail';
+        this.root.append(this.bar, this.text, this.detail);
+        this.setUnavailable('Tokens: …');
+    }
+
+    get element() {
+        return this.root;
+    }
+
+    setUnavailable(message, reason = null) {
+        this.root.dataset.level = 'none';
+        this.bar.style.width = '0%';
+        this.text.textContent = message;
+        this.detail.textContent = '';
+        this.root.title = reason ? `Token estimate unavailable: ${reason}` : 'Estimated packed-sequence tokens (text + references + audio + video) of the generation this prompt configures.';
+    }
+
+    /** est: {total, budget, sageLimit, approximate, width, height, frames, seconds}; lines: tooltip breakdown. */
+    setEstimate(est, label, lines) {
+        if (!est) {
+            this.setUnavailable('Tokens: n/a');
+            return;
+        }
+        let ratio = est.total / est.budget;
+        this.root.dataset.level = est.total > est.sageLimit ? 'critical' : ratio > 1 ? 'over' : ratio > 0.75 ? 'warn' : 'ok';
+        this.bar.style.width = `${Math.max(0, Math.min(100, ratio * 100))}%`;
+        let format = globalThis.SECoursesMiniMaxH3Tokens?.formatTokens ?? (n => `${n}`);
+        this.text.textContent = `Tokens ${est.approximate ? '~' : '≈'}${format(est.total)} / ${format(est.budget)} (${Math.round(ratio * 100)}%)`;
+        this.detail.textContent = `${est.width}×${est.height} · ${est.frames}f · ${est.seconds.toFixed(1)}s${label ? ` · ${label}` : ''}`;
+        this.root.title = [`Estimated packed sequence: ${est.total.toLocaleString()} tokens`, ...(lines || [])].join('\n');
+    }
+}
+
+/**
+ * Model estimators. Each entry: { id, matches(compatClass) -> bool, estimate(ctx) -> Promise<{estimate, label, lines} | null> }.
+ * `ctx` = { stage: 'base' | 'video', compat, prompt, param(id), promptImages, referenceCards(type), probe(elem, kind, src), modelData(name) }.
+ * The first estimator whose `matches` accepts the selected base model (or the Image To Video model) drives the meter.
+ */
+const PromptTokenEstimators = [];
+
+/** MiniMax H3: reproduces the packed [text | references | audio | video] sequence ComfyUI builds (see minimax_h3_tokens.js). */
+PromptTokenEstimators.push({
+    id: 'minimax-h3',
+    matches: (compat) => typeof compat === 'string' && compat.startsWith('minimax-h3'),
+    async estimate(ctx) {
+        let H3 = globalThis.SECoursesMiniMaxH3Tokens;
+        if (!H3) {
+            return null;
+        }
+        let spec = { prompt: ctx.prompt, pipeline: 'core', refImages: [], refVideos: [], refAudios: [], keyframeImages: 0, audioGuide: false };
+        let label;
+        let approximate = false;
+        // Init Audio (extension group): the whole soundtrack becomes a t=1 guide and, by default, sets the length.
+        let initAudioData = ctx.param('initaudio');
+        let initAudio = initAudioData ? await ctx.probe(document.getElementById('input_initaudio'), 'audio', initAudioData) : null;
+        let matchAudioDuration = ctx.param('initaudiomatchduration');
+        if (ctx.stage === 'video') {
+            // Init Image + a MiniMax H3 Video Model: keyframes on the video canvas SwarmUI picks for the video model.
+            // modelsHelpers entries are light references (modelClass.standardWidth); DescribeModel data carries standard_width.
+            let model = ctx.modelData(ctx.param('videomodel'));
+            let standardWidth = model?.standard_width ?? model?.modelClass?.standardWidth ?? 0;
+            let standardHeight = model?.standard_height ?? model?.modelClass?.standardHeight ?? 0;
+            let width = standardWidth > 0 ? standardWidth : 1024;
+            let height = standardHeight > 0 ? standardHeight : 576;
+            let imageWidth = Number(ctx.param('width')) || width;
+            let imageHeight = Number(ctx.param('height')) || height;
+            let format = ctx.param('videoresolution') || 'Model Preferred';
+            if (format === 'Image Aspect, Model Res') {
+                let scale = Math.sqrt((width * height) / (imageWidth * imageHeight));
+                width = Math.round((imageWidth * scale) / 64) * 64;
+                height = Math.round((imageHeight * scale) / 64) * 64;
+            }
+            else if (format === 'Image') {
+                width = imageWidth;
+                height = imageHeight;
+            }
+            spec.width = width;
+            spec.height = height;
+            spec.frames = H3.alignFrames(Number(ctx.param('videoframes')) || 124);
+            spec.keyframeImages = 1 + (ctx.param('videoendimage') ? 1 : 0);
+            label = 'image to video';
+        }
+        else {
+            let audioOnly = ctx.param('minimaxhaudioonly') === true;
+            spec.width = audioOnly ? 32 : (Number(ctx.param('width')) || 1344);
+            spec.height = audioOnly ? 32 : (Number(ctx.param('height')) || 768);
+            spec.frames = H3.alignFrames(Number(ctx.param('textvideoframes')) || 124);
+            spec.audioOnly = audioOnly;
+            spec.refImageSize = ctx.param('minimaxhreferenceimagesize') || 'match';
+            spec.maxSeconds = Number(ctx.param('minimaxhreferencemaxseconds')) || 15;
+            let referencesEnabled = ctx.param('minimaxhreferences') !== false;
+            for (let container of ctx.promptImages) {
+                let image = container.querySelector('img.alt-prompt-image');
+                let probe = await ctx.probe(image, 'image', image?.dataset?.filedata || image?.src);
+                if (!probe) {
+                    approximate = true;
+                }
+                spec.refImages.push({ width: probe?.width ?? null, height: probe?.height ?? null });
+            }
+            if (referencesEnabled) {
+                for (let container of ctx.referenceCards('video')) {
+                    let probe = await ctx.probe(container, 'video', container.dataset.filedata);
+                    if (!probe) {
+                        approximate = true;
+                    }
+                    spec.refVideos.push({
+                        width: probe?.width ?? null, height: probe?.height ?? null, duration: probe?.duration ?? null, hasAudio: true,
+                        trimStart: container.dataset.trimStart ? Number(container.dataset.trimStart) : null,
+                        trimEnd: container.dataset.trimEnd ? Number(container.dataset.trimEnd) : null,
+                    });
+                }
+                for (let container of ctx.referenceCards('audio')) {
+                    let probe = await ctx.probe(container, 'audio', container.dataset.filedata);
+                    if (!probe) {
+                        approximate = true;
+                    }
+                    spec.refAudios.push({ duration: probe?.duration ?? null });
+                }
+            }
+            let hasRefs = spec.refImages.length + spec.refVideos.length + spec.refAudios.length > 0;
+            label = audioOnly ? (hasRefs ? 'audio only with references' : 'audio only') : hasRefs ? 'reference to video' : 'text to video';
+        }
+        if (initAudioData) {
+            spec.audioGuide = true;
+            if (matchAudioDuration !== false) {
+                if (initAudio?.duration) {
+                    spec.frames = H3.framesForSeconds(initAudio.duration);
+                }
+                else {
+                    approximate = true;
+                }
+            }
+        }
+        let estimate = H3.estimate(spec);
+        estimate.approximate = estimate.approximate || approximate;
+        return { estimate: estimate, label: label, lines: H3.describe(estimate) };
+    },
+});
+
+/** Drives a PromptTokenMeter from the generate tab's live parameters; re-estimates on any relevant change. */
+class PromptTokenMeterController {
+    constructor(meter, references) {
+        this.meter = meter;
+        this.references = references;
+        this.timer = null;
+        this.running = false;
+        this.pending = false;
+        this.serial = 0;
+        this.promptBox = document.getElementById('alt_prompt_textbox');
+        this.referenceArea = document.getElementById('alt_prompt_image_area');
+        // Any generate-tab parameter or the prompt: one delegated listener each covers inputs (re)built later.
+        for (let eventName of ['change', 'input']) {
+            document.addEventListener(eventName, (event) => {
+                let target = event.target;
+                if (!(target instanceof Element)) {
+                    return;
+                }
+                if (target === this.promptBox || (target.id && target.id.startsWith('input_')) || target.closest?.('.auto-input')) {
+                    this.scheduleRefresh();
+                }
+            }, true);
+        }
+        // Chrome defers media metadata in hidden tabs; re-estimate once the tab is visible again.
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') {
+                this.scheduleRefresh();
+            }
+        });
+        this.scheduleRefresh(400);
+    }
+
+    scheduleRefresh(delay = 200) {
+        if (this.timer) {
+            clearTimeout(this.timer);
+        }
+        this.timer = setTimeout(() => {
+            this.timer = null;
+            this.refresh();
+        }, delay);
+    }
+
+    /** {estimator, stage, compat} for the current model selection, or null. */
+    activeEstimator() {
+        let baseCompat = typeof currentModelHelper !== 'undefined' ? currentModelHelper.curCompatClass : null;
+        for (let estimator of PromptTokenEstimators) {
+            if (estimator.matches(baseCompat)) {
+                return { estimator: estimator, stage: 'base', compat: baseCompat };
+            }
+        }
+        let videoModelName = promptParamValue('videomodel');
+        if (videoModelName) {
+            let data = typeof modelsHelpers !== 'undefined' ? modelsHelpers.getDataFor('Stable-Diffusion', videoModelName) : null;
+            let compat = data?.compat_class ?? data?.modelClass?.compatClass?.id ?? '';
+            for (let estimator of PromptTokenEstimators) {
+                if (estimator.matches(`${compat}`)) {
+                    return { estimator: estimator, stage: 'video', compat: `${compat}` };
+                }
+            }
+        }
+        return null;
+    }
+
+    async refresh() {
+        if (this.running) {
+            this.pending = true;
+            return;
+        }
+        this.running = true;
+        let serial = ++this.serial;
+        try {
+            let active = this.activeEstimator();
+            this.references.setTokenMeterVisible(Boolean(active));
+            if (!active) {
+                this.meter.setUnavailable('Tokens: n/a', 'select a model with a token estimator (eg MiniMax H3)');
+                return;
+            }
+            let ctx = {
+                stage: active.stage,
+                compat: active.compat,
+                prompt: this.promptBox?.value ?? '',
+                param: promptParamValue,
+                promptImages: [...(this.referenceArea?.querySelectorAll('img.alt-prompt-image') || [])].map(img => img.closest('.alt-prompt-image-container')).filter(c => c),
+                referenceCards: (type) => [...(this.referenceArea?.querySelectorAll(`.minimax-h3-prompt-reference[data-reference-type="${type}"]`) || [])],
+                probe: (element, kind, source) => probePromptMedia(element, kind, source, 4000, () => this.scheduleRefresh()),
+                modelData: (name) => (name && typeof modelsHelpers !== 'undefined' ? modelsHelpers.getDataFor('Stable-Diffusion', name) : null),
+            };
+            let result = await active.estimator.estimate(ctx);
+            if (serial !== this.serial) {
+                return; // a newer refresh already ran
+            }
+            if (result?.estimate) {
+                this.meter.setEstimate(result.estimate, result.label, result.lines);
+            }
+            else {
+                this.meter.setUnavailable('Tokens: n/a', 'estimator returned nothing');
+            }
+        }
+        catch (error) {
+            this.meter.setUnavailable('Tokens: n/a', `${error?.message || error}`);
+        }
+        finally {
+            this.running = false;
+            if (this.pending) {
+                this.pending = false;
+                this.scheduleRefresh();
+            }
+        }
+    }
+}
+
 class MiniMaxH3PromptReferences {
     constructor() {
         this.maxImages = 9;
@@ -77,6 +458,7 @@ class MiniMaxH3PromptReferences {
         this.syncQueued = false;
         this.trimsInputId = 'input_minimaxhreferencevideotrims';
         this.trimPopup = null;
+        this.tokenMeterWanted = false;
     }
 
     /** Schedules a single syncAll on the next frame, coalescing bursts of DOM changes. */
@@ -157,6 +539,7 @@ class MiniMaxH3PromptReferences {
         this.deactivateForOtherModels();
         this.syncAll();
         this.updateActiveState();
+        this.tokenMeterController = new PromptTokenMeterController(this.tokenMeter, this);
     }
 
     createToolbar() {
@@ -179,6 +562,9 @@ class MiniMaxH3PromptReferences {
         this.status = document.createElement('span');
         this.status.className = 'minimax-h3-prompt-reference-status';
         this.status.setAttribute('aria-live', 'polite');
+
+        // Live packed-sequence token estimate ("current / budget") of the configured generation.
+        this.tokenMeter = new PromptTokenMeter();
 
         this.soundtrackHint = document.createElement('span');
         this.soundtrackHint.className = 'minimax-h3-prompt-reference-hint';
@@ -204,7 +590,7 @@ class MiniMaxH3PromptReferences {
         this.trimFileInput.className = 'minimax-h3-prompt-reference-file-input';
         this.trimFileInput.setAttribute('aria-label', 'Add one MiniMax H3 reference with trim');
 
-        this.toolbar.append(this.uploadButton, this.trimUploadButton, this.status, this.soundtrackHint, this.hint, this.fileInput, this.trimFileInput);
+        this.toolbar.append(this.uploadButton, this.trimUploadButton, this.status, this.tokenMeter.element, this.soundtrackHint, this.hint, this.fileInput, this.trimFileInput);
         this.extraArea.prepend(this.toolbar);
     }
 
@@ -328,6 +714,7 @@ class MiniMaxH3PromptReferences {
             this.enabledInput = document.getElementById('input_minimaxhreferences');
             this.deactivateForOtherModels();
             this.updateActiveState();
+            this.tokenMeterController?.scheduleRefresh();
         }, 0);
     }
 
@@ -344,9 +731,23 @@ class MiniMaxH3PromptReferences {
         }
     }
 
+    /** The token meter follows the model estimators (eg a MiniMax H3 Video Model under an image base model),
+     * so the toolbar can be shown in a meter-only mode while the reference tools stay hidden. */
+    setTokenMeterVisible(visible) {
+        this.tokenMeterWanted = Boolean(visible);
+        this.applyToolbarVisibility();
+    }
+
+    applyToolbarVisibility() {
+        let active = this.isActive();
+        let meterOnly = !active && this.tokenMeterWanted;
+        this.toolbar.style.display = active || meterOnly ? 'flex' : 'none';
+        this.toolbar.classList.toggle('minimax-h3-toolbar-meter-only', meterOnly);
+    }
+
     updateActiveState() {
         let active = this.isActive();
-        this.toolbar.style.display = active ? 'flex' : 'none';
+        this.applyToolbarVisibility();
         this.region.classList.toggle('minimax-h3-prompt-references-active', active);
         this.addButton.title = active
             ? 'Add MiniMax H3 prompt images, videos, or audio'
@@ -606,6 +1007,7 @@ class MiniMaxH3PromptReferences {
             this.clearButton.textContent = 'Clear references';
         }
         this.renderOverlay();
+        this.tokenMeterController?.scheduleRefresh();
         if (typeof genTabLayout !== 'undefined') {
             genTabLayout.altPromptSizeHandle();
         }

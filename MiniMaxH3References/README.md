@@ -3,6 +3,31 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Live token meter (beside the prompt)
+
+Since v1.13.0 the reference toolbar shows the estimated packed-sequence length of the generation
+you have configured, eg `Tokens ≈37.7k / 109k (35%) · 1344×768 · 124f · 5.2s · text to video`.
+MiniMax H3 runs full attention over one packed sequence, `[text | references | audio | video]`, so
+this number is what drives VRAM and speed. It updates live as you type, change the resolution,
+frames / duration, Text2Video Frames or Video Frames, add or remove references (their real size,
+duration and trim window are read in the browser), pick an Init Audio (its length becomes the
+video length by default) or an Init Image / Video End Image with a MiniMax H3 Video Model, switch
+Reference Image Size or Reference Max Seconds, or toggle Audio Only. Hover the meter for the
+breakdown.
+
+- The math reproduces ComfyUI's own `PackedLayout` (`comfy/ldm/minimax/model.py`) and the
+  `MiniMaxH3ReferenceToVideo` reference sizing in `Assets/minimax_h3_tokens.js`, the same file
+  the FoleyExtension gallery node uses inside ComfyUI, where it is verified against ComfyUI. Only
+  the prompt's Qwen token count is a heuristic (within a few percent).
+- MiniMax documents no hard token limit; the budget (109,062) is the packed length of the model's
+  documented maximum output, 15 s at the 768×1344 canvas cap, the envelope the released checkpoints
+  were tested for. Above it generation still runs, but slower, with more VRAM and outside the
+  quality-tested range (the bar turns red); above 299,593 the SageAttention kernels overflow int32.
+- The meter is model-agnostic: estimators register per model compat class
+  (`PromptTokenEstimators` in `Assets/minimax_h3_prompt_references.js`), so a future model that
+  supports references or has a token budget only needs its own entry. It also follows the Image To
+  Video group, so an image model + MiniMax H3 Video Model shows the video stage's tokens.
+
 ## Init Audio (parameter group, above Init Image)
 
 Since v1.12.0 an **Init Audio** group sits directly above **Init Image**. Upload or select one
