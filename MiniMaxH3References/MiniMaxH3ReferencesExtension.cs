@@ -5,6 +5,7 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.RegularExpressions;
+using FreneticUtilities.FreneticExtensions;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Builtin_ComfyUIBackend;
@@ -65,6 +66,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMax H3 face inpaint nodes (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string FaceInpaintFeatureId = "minimax_h3_face_inpaint";
 
+    /// <summary>Tested default YOLO face model of the face pass (the same default as the SECourses ComfyUI presets).</summary>
+    public const string DefaultFaceDetector = "yolov9e-face-lindevs.pt";
+
     /// <summary>Identity-preserving detail clause appended to the face-pass prompt (same text as the ComfyUI presets).</summary>
     public const string FaceRefinementPrompt = "Preserve the exact same identity, expression, head pose, and facial proportions. Resolve natural coherent eyes, skin texture, beard strands, and hair detail. No identity change, beautification, or facial reshaping.";
 
@@ -74,7 +78,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.13.0";
+        Version = "1.13.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -251,9 +255,9 @@ public class MiniMaxH3ReferencesExtension : Extension
         T2IParamGroup group = new("Video Face Inpainting", Open: true, OrderPriority: -40,
             Description: "Optional second pass that fixes small or blurry faces in generated videos: a YOLO face model tracks the subject's face in every frame, the crops are regenerated at high resolution with the same MiniMax H3 model as img2img (the generated audio stays locked, so speech and lipsync are untouched), the regenerated face is geometry-locked to the source face and stitched back with feathered colour-matched blending. Same defaults as the SECourses ComfyUI presets. Off by default; when off it costs nothing.");
         string dep = null;
-        T2IRegisteredParam<T> Reg<T>(string name, string desc, string def, double prio, double min = 0, double max = 0, double step = 1, double viewMax = 0, Func<Session, List<string>> values = null)
+        T2IRegisteredParam<T> Reg<T>(string name, string desc, string def, double prio, double min = 0, double max = 0, double step = 1, double viewMax = 0, Func<Session, List<string>> values = null, bool validateValues = true)
         {
-            return T2IParamTypes.Register<T>(new(name, desc, def, Min: min, Max: max, Step: step, ViewMax: viewMax, GetValues: values,
+            return T2IParamTypes.Register<T>(new(name, desc, def, Min: min, Max: max, Step: step, ViewMax: viewMax, GetValues: values, ValidateValues: validateValues,
                 IgnoreIf: def == "false" ? "false" : null, FeatureFlag: FaceInpaintFeatureId, Group: group, OrderPriority: prio,
                 DependNonDefault: dep, ChangeWeight: 2));
         }
@@ -269,11 +273,83 @@ public class MiniMaxH3ReferencesExtension : Extension
         FaceSteps = Reg<int>("Face Inpaint Steps", "Sampling steps of the face pass. With denoise 0.55, 20 steps runs 11 of them.", "20", -8.4, 1, 100, 1, 50);
         FaceSampler = Reg<string>("Face Inpaint Sampler", "Sampler for the face pass. res_multistep matches the ComfyUI presets.", "res_multistep", -8.3, values: _ => ComfyUIBackendExtension.Samplers);
         FaceScheduler = Reg<string>("Face Inpaint Scheduler", "Scheduler for the face pass. simple matches the ComfyUI presets.", "simple", -8.2, values: _ => ComfyUIBackendExtension.Schedulers);
-        FaceDetector = Reg<string>("Face Inpaint Detector", "YOLO face model from the yolov8 models folder. yolov9e-face-lindevs.pt is the tested default (place it in Models/yolov8).", "yolov9e-face-lindevs.pt", -8.1, values: _ => ComfyUIBackendExtension.YoloModels);
+        // The value list is never validated by the core: the UI sends this parameter even while Video Face Inpainting is off
+        // (the core's DependNonDefault cannot drop it for a boolean master), and a user without any YOLO model would otherwise
+        // get "Invalid value for param Face Inpaint Detector - '' - must be one of: ``" on every generation. The face pass
+        // resolves the real model itself (ResolveFaceDetector) only when it actually runs.
+        FaceDetector = Reg<string>("Face Inpaint Detector", $"YOLO face model from the yolov8 models folder. {DefaultFaceDetector} is the tested default (place it in Models/yolov8). If the selected model is missing, another available face model is used automatically.", DefaultFaceDetector, -8.1, values: FaceDetectorChoices, validateValues: false);
         FaceConfidence = Reg<double>("Face Inpaint Detection Confidence", "Minimum face detection confidence. Lower finds more distant/blurry faces at the cost of false positives.", "0.35", -8, 0.05, 0.95, 0.05);
         FaceCropFactor = Reg<double>("Face Inpaint Crop Factor", "Crop side as a multiple of the detected face height. 2.2 puts the face at about 45% of the regenerated crop; bigger gives more context but less magnification.", "2.2", -7.9, 1.2, 8, 0.1, 4);
         FaceCanvasMode = Reg<string>("Face Inpaint Canvas Mode", "auto_capped_768 (recommended): size the H3 face canvas from the largest crop so no frame is downscaled, clamped to 384-768 px. auto_no_downscale: same but uncapped above (expensive on close-ups). manual: fixed 768x768.", "auto_capped_768", -7.8, values: _ => ["auto_capped_768", "auto_no_downscale", "manual"]);
         FaceTracking = Reg<bool>("Face Inpaint Identity Tracking", "Hold one subject through crowds: continuity picks most frames and a face-identity embedding (InsightFace, when installed) resolves ambiguous ones. Off tracks the largest face only.", "true", -7.7);
+    }
+
+    /// <summary>Dropdown values of "Face Inpaint Detector": every YOLO model SwarmUI knows, with the tested default always present
+    /// (first, and labelled when it is not downloaded yet) so the list is never empty and the UI never sends an empty value.</summary>
+    private static List<string> FaceDetectorChoices(Session _)
+    {
+        List<string> result = [];
+        HashSet<string> seen = [];
+        foreach (string model in ComfyUIBackendExtension.YoloModels ?? [])
+        {
+            string raw = model?.Before("///")?.Trim();
+            if (!string.IsNullOrEmpty(raw) && seen.Add(raw))
+            {
+                result.Add(model);
+            }
+        }
+        if (seen.Contains(DefaultFaceDetector))
+        {
+            int index = result.FindIndex(m => m.Before("///").Trim() == DefaultFaceDetector);
+            string preferred = result[index];
+            result.RemoveAt(index);
+            result.Insert(0, preferred);
+        }
+        else
+        {
+            result.Insert(0, $"{DefaultFaceDetector}///{DefaultFaceDetector} (not downloaded yet - place it in Models/yolov8)");
+        }
+        return result;
+    }
+
+    /// <summary>Known YOLO model names (display labels stripped).</summary>
+    private static List<string> KnownYoloModels()
+    {
+        return [.. (ComfyUIBackendExtension.YoloModels ?? []).Select(m => m?.Before("///")?.Trim()).Where(m => !string.IsNullOrEmpty(m)).Distinct()];
+    }
+
+    /// <summary>Picks the YOLO face model the face pass sends to the backend. Tolerates an empty, stale, or mistyped selection:
+    /// exact / case-insensitive / fuzzy match first, then any other face model SwarmUI knows, otherwise the requested name is
+    /// passed through so the ComfyUI node (which also scans the ultralytics folders) can load it or report a clear message.</summary>
+    private static string ResolveFaceDetector(WorkflowGenerator g)
+    {
+        string requested = (g.UserInput.Get(FaceDetector, DefaultFaceDetector) ?? "").Before("///").Trim();
+        if (string.IsNullOrEmpty(requested))
+        {
+            requested = DefaultFaceDetector;
+        }
+        List<string> known = KnownYoloModels();
+        if (known.Count == 0)
+        {
+            return requested;
+        }
+        string match = known.FirstOrDefault(m => m == requested)
+            ?? known.FirstOrDefault(m => string.Equals(m, requested, StringComparison.OrdinalIgnoreCase))
+            ?? known.FirstOrDefault(m => string.Equals(m.Replace('\\', '/'), requested.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase))
+            ?? known.FirstOrDefault(m => string.Equals(m.BeforeLast('.'), requested.BeforeLast('.'), StringComparison.OrdinalIgnoreCase))
+            ?? T2IParamTypes.GetBestInList(requested, known);
+        if (match is not null)
+        {
+            return match;
+        }
+        string faceModel = known.FirstOrDefault(m => m.Contains("face", StringComparison.OrdinalIgnoreCase));
+        if (faceModel is not null)
+        {
+            Logs.Warning($"[MiniMaxH3References] Face Inpaint Detector '{requested}' is not available, using the face model '{faceModel}' instead. Place {DefaultFaceDetector} in Models/yolov8 to use the tested default.");
+            return faceModel;
+        }
+        Logs.Warning($"[MiniMaxH3References] Face Inpaint Detector '{requested}' is not in SwarmUI's YOLO model list ({string.Join(", ", known.Take(8))}{(known.Count > 8 ? ", ..." : "")}); passing it to the backend as-is. Place {DefaultFaceDetector} in Models/yolov8 if the face pass reports it missing.");
+        return requested;
     }
 
     /// <summary>"Init Audio" group: sits directly above "Init Image" (-5). One optional soundtrack the generated video must follow.
@@ -514,7 +590,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         string track = g.CreateNode("MiniMaxH3FaceTrackCrop", new JObject()
         {
             ["images"] = images,
-            ["detector"] = g.UserInput.Get(FaceDetector, "yolov9e-face-lindevs.pt"),
+            ["detector"] = ResolveFaceDetector(g),
             ["confidence"] = g.UserInput.Get(FaceConfidence, 0.35),
             ["crop_factor"] = g.UserInput.Get(FaceCropFactor, 2.2),
             ["canvas_mode"] = g.UserInput.Get(FaceCanvasMode, "auto_capped_768"),

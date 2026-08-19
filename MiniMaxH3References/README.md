@@ -134,6 +134,13 @@ and when MiniMax H3 References are attached the face pass is conditioned on the 
 - Steps, sampler, scheduler, detection confidence, crop factor, canvas mode and identity
   tracking match the preset defaults (`20`, `res_multistep`, `simple`, `0.35`, `2.2`,
   `auto_capped_768`, on).
+- **Face Inpaint Detector** (since v1.13.1) never blocks a generation: the dropdown always lists
+  the tested default (marked "not downloaded yet" until `yolov9e-face-lindevs.pt` is in
+  `Models/yolov8`), the value is not validated against SwarmUI's YOLO list (the UI sends it even
+  while Video Face Inpainting is off), and when the pass actually runs a missing / stale name
+  falls back to another available face model (logged) or is handed to the ComfyUI node, which
+  reports clearly where to place the model. This fixes the "Invalid value for param Face Inpaint
+  Detector - '' - must be one of: ``" error users without any YOLO model hit on every generation.
 
 The group is designed to host other video architectures later; today it errors clearly when
 enabled with a non-H3 model.
