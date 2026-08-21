@@ -164,6 +164,7 @@ range are allowed up to the native MiniMax H3 node limit and remain experimental
 It exposes the model's complete dynamic reference limits in SwarmUI:
 
 - One prompt-adjacent uploader for images, videos, and audio
+- Native SwarmUI prompt video/audio attachments are recognized by the same cards, token autocomplete, and Ref2VA workflow
 - Strict MiniMax H3 architecture scoping, leaving every other model's native prompt-image uploader unchanged
 - Drag-and-drop and clipboard media support directly on the main prompt
 - Up to 9 images through Prompt Images

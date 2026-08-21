@@ -922,16 +922,18 @@ class MiniMaxH3PromptReferences {
     }
 
     references(type) {
-        return [...this.referenceArea.querySelectorAll(
-            `.minimax-h3-prompt-reference[data-reference-type="${type}"]`,
-        )];
+        let nativeTag = type === 'image' ? 'img' : type;
+        let matches = this.referenceArea.querySelectorAll(
+            `.minimax-h3-prompt-reference[data-reference-type="${type}"], ${nativeTag}.alt-prompt-image`,
+        );
+        return [...matches].map(element => element.matches('.minimax-h3-prompt-reference')
+            ? element : element.closest('.alt-prompt-image-container')).filter(container => container);
     }
 
     /** Returns the current reference container elements, in slot order, keyed by type. */
     collectReferences() {
         return {
-            image: [...this.referenceArea.querySelectorAll('img.alt-prompt-image')]
-                .map(img => img.closest('.alt-prompt-image-container')).filter(c => c),
+            image: this.references('image'),
             video: this.references('video'),
             audio: this.references('audio'),
         };
@@ -954,14 +956,14 @@ class MiniMaxH3PromptReferences {
         for (let type of ['image', 'video', 'audio']) {
             current[type].forEach((container, index) => {
                 let n = index + 1;
-                let image = container.querySelector('.alt-prompt-image');
+                let media = container.querySelector('.alt-prompt-image, .minimax-h3-prompt-reference-preview');
                 entries.push({
                     type: type,
                     n: n,
                     token: this.tokenFor(type, n),
                     color: this.colorFor(type, n),
-                    filename: container.dataset.filename || image?.dataset.filename || '',
-                    thumbSrc: image ? image.src : null,
+                    filename: container.dataset.filename || media?.dataset.filename || '',
+                    thumbSrc: type === 'image' && media ? media.src : null,
                     keys: MiniMaxH3ReferenceTypes[type].aliases.map(alias => `${alias}${n}`),
                 });
             });
@@ -978,6 +980,10 @@ class MiniMaxH3PromptReferences {
         // pointing past the attachment list is shown as inactive and omitted
         // at generation time by the backend instead of erroring.
         let current = this.collectReferences();
+        let total = current.image.length + current.video.length + current.audio.length;
+        if (total > 0 && this.isActive()) {
+            this.ensureEnabled();
+        }
         current.image.forEach((container, index) => {
             let n = index + 1;
             container.dataset.referenceLabel = this.tokenFor('image', n);
@@ -988,6 +994,7 @@ class MiniMaxH3PromptReferences {
         for (let type of ['video', 'audio']) {
             current[type].forEach((container, index) => {
                 let n = index + 1;
+                container.dataset.referenceLabel = this.tokenFor(type, n);
                 let label = container.querySelector('.minimax-h3-prompt-reference-label');
                 if (label) {
                     label.textContent = this.tokenFor(type, n);
@@ -1001,7 +1008,6 @@ class MiniMaxH3PromptReferences {
         this.syncSlots(current.audio, this.audioInputIds);
         this.syncVideoTrims(current.video);
         this.status.textContent = `${current.image.length}/${this.maxImages} images | ${current.video.length}/${this.maxVideos} videos | ${current.audio.length}/${this.maxAudios} audio`;
-        let total = current.image.length + current.video.length + current.audio.length;
         this.hint.style.display = total > 0 ? '' : 'none';
         if (this.clearButton && this.isActive()) {
             this.clearButton.textContent = 'Clear references';
@@ -1407,12 +1413,15 @@ class MiniMaxH3PromptReferences {
             }
             let reference = references[index];
             if (reference) {
+                let media = reference.querySelector('.alt-prompt-image, .minimax-h3-prompt-reference-preview');
+                let filedata = reference.dataset.filedata || media?.dataset.filedata;
                 // The file payloads are multi-megabyte base64 strings; only touch
                 // the attribute when the slot actually changes.
-                if (input.dataset.filedata !== reference.dataset.filedata) {
-                    input.dataset.filedata = reference.dataset.filedata;
+                if (input.dataset.filedata !== filedata) {
+                    input.dataset.filedata = filedata;
                 }
-                let storageFilename = reference.dataset.storageFilename || reference.dataset.filename;
+                let displayFilename = reference.dataset.filename || media?.dataset.filename || '';
+                let storageFilename = reference.dataset.storageFilename || displayFilename;
                 if (input.dataset.filename !== storageFilename) {
                     input.dataset.filename = storageFilename;
                 }
@@ -1428,8 +1437,10 @@ class MiniMaxH3PromptReferences {
             }
             let parent = findParentOfClass(input, 'auto-input');
             let label = parent?.querySelector('.auto-file-input-filename');
-            if (label && label.textContent !== (reference?.dataset.filename || '')) {
-                label.textContent = reference?.dataset.filename || '';
+            let referenceMedia = reference?.querySelector('.alt-prompt-image, .minimax-h3-prompt-reference-preview');
+            let referenceFilename = reference?.dataset.filename || referenceMedia?.dataset.filename || '';
+            if (label && label.textContent !== referenceFilename) {
+                label.textContent = referenceFilename;
             }
         });
     }

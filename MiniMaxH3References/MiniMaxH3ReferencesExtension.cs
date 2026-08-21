@@ -78,7 +78,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.13.1";
+        Version = "1.13.2";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -848,8 +848,8 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             throw new SwarmUserErrorException("MiniMax H3 supports at most nine image references. Remove extra Prompt Images.");
         }
-        List<VideoFile> videos = GetValues(g, ReferenceVideos);
-        List<AudioFile> audios = GetValues(g, ReferenceAudios);
+        List<VideoFile> videos = GetReferenceMediaValues(g, "promptvideos", ReferenceVideos);
+        List<AudioFile> audios = GetReferenceMediaValues(g, "promptaudios", ReferenceAudios);
         bool audioOnly = g.UserInput.Get(AudioOnly, false);
         double referenceMaxSeconds = g.UserInput.Get(ReferenceMaxSeconds, 15.0);
         int standaloneAudioCount = audios.Count;
@@ -1205,6 +1205,10 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             return true;
         }
+        if (HasPromptMediaValues<VideoFile>(g, "promptvideos") || HasPromptMediaValues<AudioFile>(g, "promptaudios"))
+        {
+            return true;
+        }
         foreach (T2IRegisteredParam<VideoFile> parameter in ReferenceVideos)
         {
             if (g.UserInput.TryGet(parameter, out VideoFile _))
@@ -1222,6 +1226,34 @@ public class MiniMaxH3ReferencesExtension : Extension
         return T2IParamTypes.Types.TryGetValue("videoaudioreference", out T2IParamType legacyAudioType)
             && g.UserInput.TryGetRaw(legacyAudioType, out object legacyAudioValue)
             && legacyAudioValue is AudioFile;
+    }
+
+    /// <summary>Returns whether a current SwarmUI prompt-media list contains at least one item.
+    /// The runtime lookup keeps this extension compatible with SwarmUI builds from before prompt video/audio lists existed.</summary>
+    private static bool HasPromptMediaValues<T>(WorkflowGenerator g, string paramId)
+    {
+        return T2IParamTypes.Types.TryGetValue(paramId, out T2IParamType type)
+            && g.UserInput.TryGetRaw(type, out object rawValue)
+            && rawValue is List<T> values
+            && values.Count > 0;
+    }
+
+    /// <summary>Uses the extension's ordered hidden slots when populated, then falls back to SwarmUI's unified prompt-media list.</summary>
+    private static List<T> GetReferenceMediaValues<T>(WorkflowGenerator g, string paramId, List<T2IRegisteredParam<T>> slotParameters)
+    {
+        List<T> slotValues = GetValues(g, slotParameters);
+        if (slotValues.Count > 0)
+        {
+            return slotValues;
+        }
+        if (T2IParamTypes.Types.TryGetValue(paramId, out T2IParamType type)
+            && g.UserInput.TryGetRaw(type, out object rawValue)
+            && rawValue is List<T> values
+            && values.Count > 0)
+        {
+            return values;
+        }
+        return [];
     }
 
     private static List<T> GetValues<T>(WorkflowGenerator g, List<T2IRegisteredParam<T>> parameters)
