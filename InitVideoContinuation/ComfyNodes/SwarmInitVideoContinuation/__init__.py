@@ -1,4 +1,4 @@
-"""Streaming last-frame extraction and video continuation output for SwarmUI."""
+"""Streaming context-frame extraction and video continuation output for SwarmUI."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import subprocess
 import tempfile
 import time
 import wave
+from collections import deque
 
 import av
 import folder_paths
@@ -208,7 +209,13 @@ def _active_trim_window(video) -> tuple[float, float | None]:
     return 0.0, None
 
 
-def _decode_last_frame_attempt(source, start_time: float, end_time: float | None, seek_time: float):
+def _decode_last_frames_attempt(
+    source,
+    start_time: float,
+    end_time: float | None,
+    seek_time: float,
+    context_frames: int,
+):
     if hasattr(source, "seek"):
         source.seek(0)
     with av.open(source, mode="r") as container:
@@ -219,7 +226,7 @@ def _decode_last_frame_attempt(source, start_time: float, end_time: float | None
             seek_pts = max(0, int(seek_time / stream.time_base))
             container.seek(seek_pts, stream=stream, backward=True, any_frame=False)
 
-        last_frame = None
+        last_frames = deque(maxlen=context_frames)
         reached_end = False
         for packet in container.demux(stream):
             try:
@@ -233,27 +240,36 @@ def _decode_last_frame_attempt(source, start_time: float, end_time: float | None
                 if end_time is not None and frame_time is not None and frame_time >= end_time:
                     reached_end = True
                     break
-                last_frame = frame
+                last_frames.append(frame)
             if reached_end:
                 break
 
-        if last_frame is None:
+        if len(last_frames) < context_frames:
             return None
-        image = last_frame.to_ndarray(format="rgb24")
-        rotation = getattr(last_frame, "rotation", 0) or 0
-        if rotation:
-            image = np.rot90(image, k=int(round(rotation // 90)), axes=(0, 1))
-        return np.ascontiguousarray(image)
+        images = []
+        for frame in last_frames:
+            image = frame.to_ndarray(format="rgb24")
+            rotation = getattr(frame, "rotation", 0) or 0
+            if rotation:
+                image = np.rot90(image, k=int(round(rotation // 90)), axes=(0, 1))
+            images.append(np.ascontiguousarray(image))
+        return np.stack(images, axis=0)
 
 
-def _decode_last_frame(video) -> torch.Tensor:
+def _decode_last_frames(video, context_frames: int) -> torch.Tensor:
+    context_frames = int(context_frames)
+    if context_frames not in (1, 5, 22, 39, 56):
+        raise ValueError("Context frames must be 1, 5, 22, 39, or 56.")
     source = _get_stream_source(video)
     if source is None:
         components = video.get_components()
         images = components.images
-        if images.shape[0] == 0:
-            raise ValueError("The Init Image video contains no decodable frames.")
-        return images[-1:].contiguous()
+        if images.shape[0] < context_frames:
+            raise ValueError(
+                f"The Init Image video has {images.shape[0]} frame(s), but "
+                f"{context_frames} context frames were requested."
+            )
+        return images[-context_frames:].contiguous()
 
     start_time, trim_duration = _active_trim_window(video)
     end_time = start_time + trim_duration if trim_duration is not None else None
@@ -269,16 +285,22 @@ def _decode_last_frame(video) -> torch.Tensor:
 
     seek_time = start_time
     if end_time is not None:
-        seek_time = max(start_time, end_time - 30.0)
+        seek_time = max(start_time, end_time - max(30.0, context_frames / 24.0 + 2.0))
     try:
-        image = _decode_last_frame_attempt(source, start_time, end_time, seek_time)
+        images = _decode_last_frames_attempt(
+            source, start_time, end_time, seek_time, context_frames
+        )
     except (av.error.FFmpegError, OSError, ValueError):
-        image = None
-    if image is None and seek_time > start_time:
-        image = _decode_last_frame_attempt(source, start_time, end_time, start_time)
-    if image is None:
-        raise ValueError("The Init Image video contains no decodable frames.")
-    return torch.from_numpy(image).to(dtype=torch.float32).div_(255.0).unsqueeze(0)
+        images = None
+    if images is None and seek_time > start_time:
+        images = _decode_last_frames_attempt(
+            source, start_time, end_time, start_time, context_frames
+        )
+    if images is None:
+        raise ValueError(
+            f"The Init Image video has fewer than {context_frames} decodable frame(s)."
+        )
+    return torch.from_numpy(images).to(dtype=torch.float32).div_(255.0)
 
 
 def _first_decodable_audio_stream(source_path: str) -> int | None:
@@ -378,17 +400,24 @@ def _run_ffmpeg(args: list[str], generated_images: torch.Tensor | None) -> None:
 class SwarmInitVideoLastFrame:
     @classmethod
     def INPUT_TYPES(cls):
-        return {"required": {"video": ("VIDEO",)}}
+        return {
+            "required": {
+                "video": ("VIDEO",),
+            },
+            "optional": {
+                "context_frames": ("INT", {"default": 1, "min": 1, "max": 56}),
+            },
+        }
 
     RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("last_frame",)
+    RETURN_NAMES = ("last_frames",)
     FUNCTION = "extract"
     CATEGORY = "SwarmUI/video"
-    DESCRIPTION = "Extracts only the last decodable frame of a VIDEO without materializing the full video as an image batch."
+    DESCRIPTION = "Extracts the selected final decodable video frames without materializing the full video as an image batch."
 
     @torch.inference_mode()
-    def extract(self, video):
-        return (_decode_last_frame(video),)
+    def extract(self, video, context_frames="1"):
+        return (_decode_last_frames(video, int(context_frames)),)
 
 
 class SwarmInitVideoPrependSourceSilence:
@@ -443,14 +472,17 @@ class SwarmInitVideoContinuationSave:
                 "ffmpeg_path": ("STRING", {"default": "ffmpeg"}),
                 "source_duration_hint": ("FLOAT", {"default": 0.0, "min": 0.0, "max": 31536000.0, "step": 0.01}),
             },
-            "optional": {"generated_audio": ("AUDIO",)},
+            "optional": {
+                "generated_audio": ("AUDIO",),
+                "skip_frames": ("INT", {"default": 1, "min": 1, "max": 56}),
+            },
         }
 
     RETURN_TYPES = ()
     FUNCTION = "save"
     OUTPUT_NODE = True
     CATEGORY = "SwarmUI/video"
-    DESCRIPTION = "Streams the source video through FFmpeg, skips generated frame zero, and saves both segments as one result."
+    DESCRIPTION = "Streams the source video through FFmpeg, removes generated context frames, and saves both segments as one result."
 
     def save(
         self,
@@ -460,6 +492,7 @@ class SwarmInitVideoContinuationSave:
         format,
         ffmpeg_path,
         source_duration_hint,
+        skip_frames=1,
         generated_audio=None,
     ):
         if format not in FORMAT_SETTINGS:
@@ -470,11 +503,19 @@ class SwarmInitVideoContinuationSave:
             raise ValueError("The generated video contains no frames.")
         if generated_images.shape[3] < 3:
             raise ValueError("The generated video must contain at least three color channels.")
+        skip_frames = int(skip_frames)
+        if skip_frames not in (1, 5, 22, 39, 56):
+            raise ValueError("Continuation skip frames must be 1, 5, 22, 39, or 56.")
 
         ffmpeg = _resolve_ffmpeg(ffmpeg_path)
         settings = FORMAT_SETTINGS[format]
         frame_count = int(generated_images.shape[0])
-        append_count = max(0, frame_count - 1)
+        if frame_count <= skip_frames:
+            raise ValueError(
+                f"The generated video has {frame_count} frame(s), which is not longer "
+                f"than its {skip_frames}-frame continuation context."
+            )
+        append_count = frame_count - skip_frames
         height = int(generated_images.shape[1])
         width = int(generated_images.shape[2])
         if width <= 0 or height <= 0:
@@ -561,7 +602,7 @@ class SwarmInitVideoContinuationSave:
             args += settings["container_args"]
             args.append(output_path)
 
-            frames_to_append = generated_images[1:] if append_count > 0 else None
+            frames_to_append = generated_images[skip_frames:] if append_count > 0 else None
             _run_ffmpeg(args, frames_to_append)
             if not os.path.isfile(output_path) or os.path.getsize(output_path) == 0:
                 raise RuntimeError("FFmpeg completed without producing a continuation video.")
@@ -577,6 +618,7 @@ class SwarmInitVideoContinuationSave:
         format,
         ffmpeg_path,
         source_duration_hint,
+        skip_frames=1,
         generated_audio=None,
     ):
         return time.time()
@@ -589,7 +631,7 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "SwarmInitVideoLastFrame": "Swarm Init Video Last Frame",
+    "SwarmInitVideoLastFrame": "Swarm Init Video Last Frames",
     "SwarmInitVideoPrependSourceSilence": "Swarm Init Video Prepend Source Silence",
     "SwarmInitVideoContinuationSave": "Swarm Init Video Continuation Save",
 }

@@ -23,14 +23,91 @@ class InitVideoContinuationUI {
         setMediaFileInput = (elem, file, type) => {
             this.setMediaFileInput(elem, file, type);
         };
-        this.configureInitInput();
+        this.configureUI();
         sessionReadyCallbacks.push(() => {
-            this.configureInitInput();
+            this.configureUI();
         });
         this.inputObserver = new MutationObserver(() => {
-            this.configureInitInput();
+            this.configureUI();
         });
         this.inputObserver.observe(document.documentElement, { childList: true, subtree: true });
+    }
+
+    /** Keeps the optional context selector beside, and gated by, its continuation toggle. */
+    configureUI() {
+        this.configureInitInput();
+        this.configureContinuationControls();
+    }
+
+    configureContinuationControls() {
+        let toggle = document.getElementById('input_continuefromlastvideoframes');
+        let select = document.getElementById('input_continuationcontextframes');
+        if (!toggle || !select) {
+            return;
+        }
+
+        let toggleRow = toggle.closest('.auto-input');
+        let selectRow = select.closest('.auto-input');
+        if (!toggleRow || !selectRow) {
+            return;
+        }
+
+        let wrapper = document.getElementById('init-video-continuation-controls');
+        if (!wrapper) {
+            wrapper = document.createElement('div');
+            wrapper.id = 'init-video-continuation-controls';
+            wrapper.className = 'init-video-continuation-controls';
+            toggleRow.before(wrapper);
+            wrapper.append(toggleRow, selectRow);
+            toggleRow.classList.add('init-video-continuation-toggle');
+            selectRow.classList.add('init-video-continuation-context');
+            select.setAttribute('aria-label', 'Continuation context frames');
+            select.title = 'Continuation context frames';
+
+            let style = document.createElement('style');
+            style.id = 'init-video-continuation-style';
+            style.textContent = `
+                .init-video-continuation-controls {
+                    display: grid;
+                    grid-template-columns: minmax(0, 1fr) 56px;
+                    align-items: center;
+                    column-gap: 8px;
+                }
+                .init-video-continuation-controls > .auto-input {
+                    min-width: 0;
+                    margin: 0;
+                }
+                .init-video-continuation-context > label {
+                    display: none;
+                }
+                .init-video-continuation-context select {
+                    width: 100% !important;
+                    min-width: 50px;
+                }
+                .init-video-continuation-context[data-disabled="true"] {
+                    opacity: 0.45;
+                }
+            `;
+            if (!document.getElementById(style.id)) {
+                document.head.append(style);
+            }
+
+            toggle.addEventListener('change', () => this.syncContinuationControls(toggle, select, wrapper));
+            new MutationObserver(() => this.syncContinuationControls(toggle, select, wrapper)).observe(
+                toggleRow,
+                { attributes: true, attributeFilter: ['style', 'data-disabled'] }
+            );
+        }
+        this.syncContinuationControls(toggle, select, wrapper);
+    }
+
+    syncContinuationControls(toggle, select, wrapper) {
+        let toggleRow = toggle.closest('.auto-input');
+        let selectRow = select.closest('.auto-input');
+        let enabled = toggle.checked && !toggle.disabled;
+        select.disabled = !enabled;
+        selectRow.dataset.disabled = enabled ? 'false' : 'true';
+        wrapper.style.display = toggleRow.style.display == 'none' || toggleRow.hidden ? 'none' : '';
     }
 
     /** Adds the extra video formats to the Init Image file chooser once that input exists. */

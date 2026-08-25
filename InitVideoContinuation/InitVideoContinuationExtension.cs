@@ -13,12 +13,17 @@ using SwarmUI.Utils;
 
 namespace FurkanGozukara.SwarmExtensions.InitVideoContinuation;
 
-/// <summary>Continues an Init Image video from its last frame and joins the result back onto the source video.</summary>
+/// <summary>Continues an Init Image video from its final video frames and joins the result back onto the source video.</summary>
 public class InitVideoContinuationExtension : Extension
 {
-    private sealed class ContinuationState(WGNodeData originalVideo, double? sourceDuration, JArray sourceVideoPath, string ffmpegPath, bool useStreamingMerge)
+    private sealed class ContinuationState(WGNodeData originalVideo, JArray contextImages, int contextFrames,
+        double? sourceDuration, JArray sourceVideoPath, string ffmpegPath, bool useStreamingMerge)
     {
         public WGNodeData OriginalVideo = originalVideo;
+
+        public JArray ContextImages = contextImages;
+
+        public int ContextFrames = contextFrames;
 
         public double? SourceDuration = sourceDuration;
 
@@ -49,14 +54,15 @@ public class InitVideoContinuationExtension : Extension
     private static bool _preInitialized;
     private static bool _initialized;
     private static T2IRegisteredParam<bool> ContinueInitVideo;
+    private static T2IRegisteredParam<string> ContinuationFrames;
 
     /// <summary>This extension is installed by the SECourses updater rather than a git clone, so metadata is set directly instead of read from git.</summary>
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Turns an Init Image video into a simple last-frame continuation and saves the source and generated video as one result.";
+        Description = "Continues an Init Image video from 1, 5, 22, 39, or 56 final frames and saves the source and generated video as one result.";
         License = "MIT";
-        Version = "1.2.1";
+        Version = "1.3.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/InitVideoContinuation";
     }
 
@@ -89,13 +95,22 @@ public class InitVideoContinuationExtension : Extension
         RegisterAdditionalVideoTypes();
 
         ContinueInitVideo = T2IParamTypes.Register<bool>(new(
-            "Continue Init Video From Last Frame",
-            "When the Init Image is a video, use its last frame as the still init image, generate with the current video setup, then append generated frames starting at frame 1 so the shared boundary frame is not duplicated.",
+            "Continue From Last Video Frames",
+            "When Init Image is a video, continue from its selected final video-frame context and append only newly generated frames. One frame preserves the original behavior; 5, 22, 39, and 56 use MiniMax H3's native multi-frame guide.",
             "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupInitImage,
             OrderPriority: -3.1, IsAdvanced: true, DependNonDefault: T2IParamTypes.InitImage.Type.ID,
             Permission: Permissions.ParamVideo, ChangeWeight: 8));
+        T2IParamTypes.ParameterRemaps["continueinitvideofromlastframe"] = ContinueInitVideo.Type.ID;
+        ContinuationFrames = T2IParamTypes.Register<string>(new(
+            "Continuation Context Frames",
+            "Final video frames used as context. One preserves the original last-frame behavior. Multi-frame choices require MiniMax H3, bypass Init Image Creativity, and are removed from the generated segment before it is appended.",
+            "1", IgnoreIf: "1", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupInitImage,
+            OrderPriority: -3.0, IsAdvanced: true, DependNonDefault: ContinueInitVideo.Type.ID,
+            Permission: Permissions.ParamVideo, ChangeWeight: 8,
+            GetValues: (_) => ["1", "5", "22", "39", "56"]));
 
         WorkflowGenerator.AddStep(PrepareLastFrameInit, -8.9);
+        WorkflowGenerator.AltImageToVideoPostHandlers.Add(ApplyH3ContextGuide);
         WorkflowGenerator.AddStep(MergeFinalVideo, 199.5);
         Logs.Info("Init Video Continuation extension initialized.");
     }
@@ -108,19 +123,40 @@ public class InitVideoContinuationExtension : Extension
         }
         if (!g.UserInput.TryGet(T2IParamTypes.InitImage, out Image initImage))
         {
-            throw new SwarmUserErrorException("Continue Init Video From Last Frame requires a video in Init Image.");
+            throw new SwarmUserErrorException("Continue From Last Video Frames requires a video in Init Image.");
         }
         if (initImage.Type.MetaType != MediaMetaType.Video)
         {
-            throw new SwarmUserErrorException("Continue Init Video From Last Frame requires a supported video file in Init Image.");
+            throw new SwarmUserErrorException("Continue From Last Video Frames requires a supported video file in Init Image.");
         }
-        if (!g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel _))
+        if (!g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel videoModel))
         {
-            throw new SwarmUserErrorException("Continue Init Video From Last Frame requires a model in the Image To Video group's Video Model input.");
+            throw new SwarmUserErrorException("Continue From Last Video Frames requires a model in the Image To Video group's Video Model input.");
         }
         if (g.BasicInputImage is null || g.BasicInputImage.DataType != WGNodeData.DT_VIDEO || g.CurrentMedia is null)
         {
             throw new SwarmUserErrorException("The Init Image video could not be loaded as video frames. Make sure the selected backend supports SwarmUI video loading.");
+        }
+        int contextFrames = ParseContextFrames(g.UserInput.Get(ContinuationFrames, "1"));
+        if (contextFrames > 1
+            && videoModel.ModelClass?.CompatClass?.ID != T2IModelClassSorter.CompatMiniMaxH3.ID)
+        {
+            throw new SwarmUserErrorException(
+                "Continuation context choices 5, 22, 39, and 56 require a MiniMax H3 Video Model. " +
+                "Choose 1 for other video models.");
+        }
+        int requestedFrames = WorkflowGenerator.MiniMaxH3AlignFrames(
+            g.UserInput.Get(T2IParamTypes.VideoFrames, 124));
+        if (contextFrames > 1 && requestedFrames <= contextFrames)
+        {
+            throw new SwarmUserErrorException(
+                $"The generated video must be longer than its {contextFrames}-frame continuation context. " +
+                "Increase Video Frames or choose a shorter context.");
+        }
+        if (contextFrames > 1 && g.UserInput.Get(T2IParamTypes.InitImageCreativity, 0.0) != 0.0)
+        {
+            g.UserInput.Set(T2IParamTypes.InitImageCreativity, 0.0);
+            Logs.Info("Ignored Init Image Creativity because multi-frame continuation uses MiniMax H3's native context guide.");
         }
 
         WGNodeData processedVideo = g.BasicInputImage;
@@ -144,16 +180,15 @@ public class InitVideoContinuationExtension : Extension
             && g.Features.Contains(StreamingFeature)
             && streamingSettingsSupported;
 
-        States.Remove(g);
-        States.Add(g, new ContinuationState(originalVideo, GetSourceDuration(g), sourceVideoPath, ffmpegPath, useStreamingMerge));
-
+        string contextBatch;
         string lastFrame;
         string frameCount = null;
         if (useStreamingMerge)
         {
-            lastFrame = g.CreateNode("SwarmInitVideoLastFrame", new JObject()
+            contextBatch = g.CreateNode("SwarmInitVideoLastFrame", new JObject()
             {
-                ["video"] = ClonePath(sourceVideoPath)
+                ["video"] = ClonePath(sourceVideoPath),
+                ["context_frames"] = contextFrames
             });
         }
         else
@@ -162,19 +197,37 @@ public class InitVideoContinuationExtension : Extension
             {
                 ["image"] = ClonePath(originalVideoPath)
             });
-            string lastFrameIndex = g.CreateNode("SwarmIntAdd", new JObject()
+            string contextStartIndex = g.CreateNode("SwarmIntAdd", new JObject()
             {
                 ["a"] = WorkflowGenerator.NodePath(frameCount, 0),
-                ["b"] = -1
+                ["b"] = -contextFrames
             });
-            lastFrame = g.CreateNode("ImageFromBatch", new JObject()
+            contextBatch = g.CreateNode("ImageFromBatch", new JObject()
             {
                 ["image"] = ClonePath(originalVideoPath),
-                ["batch_index"] = WorkflowGenerator.NodePath(lastFrameIndex, 0),
+                ["batch_index"] = WorkflowGenerator.NodePath(contextStartIndex, 0),
+                ["length"] = contextFrames
+            });
+        }
+        if (contextFrames == 1)
+        {
+            lastFrame = contextBatch;
+        }
+        else
+        {
+            lastFrame = g.CreateNode("ImageFromBatch", new JObject()
+            {
+                ["image"] = WorkflowGenerator.NodePath(contextBatch, 0),
+                ["batch_index"] = contextFrames - 1,
                 ["length"] = 1
             });
         }
+        JArray contextBatchPath = WorkflowGenerator.NodePath(contextBatch, 0);
         JArray lastFramePath = WorkflowGenerator.NodePath(lastFrame, 0);
+
+        States.Remove(g);
+        States.Add(g, new ContinuationState(originalVideo, ClonePath(contextBatchPath), contextFrames,
+            GetSourceDuration(g), sourceVideoPath, ffmpegPath, useStreamingMerge));
 
         WGNodeData generationImage;
         if (hasInitNoise)
@@ -186,11 +239,11 @@ public class InitVideoContinuationExtension : Extension
         {
             if (useStreamingMerge)
             {
-                ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, lastFrame);
+                ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, contextBatch, lastFrame);
             }
             else
             {
-                ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, frameCount, lastFrame);
+                ReplaceNodeConnectionExcept(g, originalVideoPath, lastFramePath, frameCount, contextBatch, lastFrame);
             }
             generationImage = processedVideo.WithPath(ClonePath(lastFramePath), WGNodeData.DT_IMAGE);
         }
@@ -209,11 +262,62 @@ public class InitVideoContinuationExtension : Extension
         if (g.UserInput.TryGet(T2IParamTypes.Video2VideoCreativity, out _))
         {
             g.UserInput.Remove(T2IParamTypes.Video2VideoCreativity);
-            Logs.Info("Ignored Video2Video Creativity because Init Video Continuation intentionally uses only the source video's last frame.");
+            Logs.Info("Ignored Video2Video Creativity because video continuation uses only the selected final context frames.");
         }
         Logs.Info(useStreamingMerge
-            ? "Prepared the Init Image video's last frame with the streaming continuation path."
-            : "Prepared the Init Image video's last frame with SwarmUI's frame-batch fallback path.");
+            ? $"Prepared the Init Image video's final {contextFrames} frame(s) with the streaming continuation path."
+            : $"Prepared the Init Image video's final {contextFrames} frame(s) with SwarmUI's frame-batch fallback path.");
+    }
+
+    private static void ApplyH3ContextGuide(WorkflowGenerator.ImageToVideoGenInfo genInfo)
+    {
+        WorkflowGenerator g = genInfo.Generator;
+        if (!States.TryGetValue(g, out ContinuationState state) || state.ContextFrames == 1)
+        {
+            return;
+        }
+        if (genInfo.VideoModel.ModelClass?.CompatClass?.ID != T2IModelClassSorter.CompatMiniMaxH3.ID
+            || genInfo.Vae is null
+            || genInfo.PosCond is null
+            || g.CurrentMedia is null)
+        {
+            throw new SwarmUserErrorException(
+                "Multi-frame video continuation could not attach its MiniMax H3 context guide. " +
+                "Check the selected Video Model and backend version.");
+        }
+
+        // SwarmUI's regular H3 setup adds the still last frame here. Remove only
+        // that first-frame input, preserving an optional user-selected end frame.
+        string conditioningNodeId = $"{genInfo.PosCond[0]}";
+        if (g.Workflow.TryGetValue(conditioningNodeId, out JToken token)
+            && token is JObject conditioningNode
+            && $"{conditioningNode["class_type"]}" == "SwarmMiniMaxH3AddKeyframes"
+            && conditioningNode["inputs"] is JObject conditioningInputs)
+        {
+            conditioningInputs.Remove("first_frame");
+        }
+
+        string guide = g.CreateNode("MiniMaxH3AddGuide", new JObject()
+        {
+            ["positive"] = ClonePath(genInfo.PosCond),
+            ["vae"] = ClonePath(genInfo.Vae.Path),
+            ["latent"] = ClonePath(g.CurrentMedia.Path),
+            ["image"] = ClonePath(state.ContextImages),
+            ["frame_idx"] = 0
+        });
+        genInfo.PosCond = WorkflowGenerator.NodePath(guide, 0);
+        Logs.Info($"Attached {state.ContextFrames} final video frames with MiniMax H3's native guide.");
+    }
+
+    private static int ParseContextFrames(string value)
+    {
+        if (!int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out int frames)
+            || frames is not (1 or 5 or 22 or 39 or 56))
+        {
+            throw new SwarmUserErrorException(
+                "Continuation Context Frames must be 1, 5, 22, 39, or 56.");
+        }
+        return frames;
     }
 
     private static void MergeFinalVideo(WorkflowGenerator g)
@@ -227,7 +331,7 @@ public class InitVideoContinuationExtension : Extension
             WGNodeData generatedVideo = g.CurrentMedia?.AsRawImage(g.CurrentVae);
             if (generatedVideo is null || generatedVideo.DataType != WGNodeData.DT_VIDEO)
             {
-                throw new SwarmUserErrorException("Continue Init Video From Last Frame did not receive a generated video to append. Check the selected video model and video settings.");
+                throw new SwarmUserErrorException("Continue From Last Video Frames did not receive a generated video to append. Check the selected video model and video settings.");
             }
 
             if (state.UseStreamingMerge)
@@ -268,12 +372,12 @@ public class InitVideoContinuationExtension : Extension
             string appendedFrameCount = g.CreateNode("SwarmIntAdd", new JObject()
             {
                 ["a"] = WorkflowGenerator.NodePath(generatedFrameCount, 0),
-                ["b"] = -1
+                ["b"] = -state.ContextFrames
             });
             string generatedWithoutBoundaryFrame = g.CreateNode("ImageFromBatch", new JObject()
             {
                 ["image"] = ClonePath(generatedVideo.Path),
-                ["batch_index"] = 1,
+                ["batch_index"] = state.ContextFrames,
                 ["length"] = WorkflowGenerator.NodePath(appendedFrameCount, 0)
             });
             string joinedVideo = g.CreateNode("ImageBatch", new JObject()
@@ -285,14 +389,15 @@ public class InitVideoContinuationExtension : Extension
             WGNodeData mergedVideo = generatedVideo.WithPath(WorkflowGenerator.NodePath(joinedVideo, 0), WGNodeData.DT_VIDEO);
             mergedVideo.FPS = outputFps;
             mergedVideo.Frames = null;
-            mergedVideo.AttachedAudio = AppendAudio(g, state.OriginalVideo.AttachedAudio, generatedVideo.AttachedAudio,
+            WGNodeData generatedAudio = TrimGeneratedAudio(g, generatedVideo, state.ContextFrames);
+            mergedVideo.AttachedAudio = AppendAudio(g, state.OriginalVideo.AttachedAudio, generatedAudio,
                 state.SourceDuration, WorkflowGenerator.NodePath(resampledOriginal, 0), outputFps);
             g.CurrentMedia = mergedVideo;
 
             RemoveAutomaticOutput(g, "9");
             RemoveAutomaticOutput(g, "30");
             g.CurrentMedia.SaveOutput(g.CurrentVae, g.CurrentAudioVae, "9");
-            Logs.Info("Joined the Init Image video with generated frames 1 through the end; generated frame 0 was skipped to prevent a duplicate boundary frame.");
+            Logs.Info($"Joined the Init Image video after removing {state.ContextFrames} generated context frame(s).");
         }
         finally
         {
@@ -302,7 +407,7 @@ public class InitVideoContinuationExtension : Extension
 
     private static void SaveStreamingContinuation(WorkflowGenerator g, ContinuationState state, WGNodeData generatedVideo)
     {
-        WGNodeData generatedAudio = DecodeAudio(g, generatedVideo.AttachedAudio);
+        WGNodeData generatedAudio = TrimGeneratedAudio(g, generatedVideo, state.ContextFrames);
         JObject inputs = new()
         {
             ["source_video"] = ClonePath(state.SourceVideoPath),
@@ -310,7 +415,8 @@ public class InitVideoContinuationExtension : Extension
             ["fps"] = generatedVideo.FPS?.DeepClone() ?? new JValue(g.Text2VideoFPS()),
             ["format"] = g.UserInput.Get(T2IParamTypes.VideoFormat, "h264-mp4"),
             ["ffmpeg_path"] = state.FFmpegPath,
-            ["source_duration_hint"] = state.SourceDuration ?? 0
+            ["source_duration_hint"] = state.SourceDuration ?? 0,
+            ["skip_frames"] = state.ContextFrames
         };
         if (generatedAudio is not null)
         {
@@ -320,7 +426,34 @@ public class InitVideoContinuationExtension : Extension
         RemoveAutomaticOutput(g, "9");
         RemoveAutomaticOutput(g, "30");
         g.CreateNode("SwarmInitVideoContinuationSave", inputs, "9");
-        Logs.Info("Streaming merge will append generated frames 1 through the end with FFmpeg; generated frame 0 is skipped to prevent a duplicate boundary frame.");
+        Logs.Info($"Streaming merge will remove {state.ContextFrames} generated context frame(s) before appending with FFmpeg.");
+    }
+
+    private static WGNodeData TrimGeneratedAudio(WorkflowGenerator g, WGNodeData generatedVideo, int contextFrames)
+    {
+        WGNodeData audio = DecodeAudio(g, generatedVideo.AttachedAudio);
+        if (audio is null || contextFrames == 1)
+        {
+            // Preserve version 1.2's exact single-frame audio behavior.
+            return audio;
+        }
+        double fps = generatedVideo.FPS is null
+            ? g.UserInput.Get(T2IParamTypes.VideoFPS, 24)
+            : Convert.ToDouble(generatedVideo.FPS, CultureInfo.InvariantCulture);
+        int totalFrames = generatedVideo.Frames
+            ?? WorkflowGenerator.MiniMaxH3AlignFrames(g.UserInput.Get(T2IParamTypes.VideoFrames, 124));
+        if (!double.IsFinite(fps) || fps <= 0 || totalFrames <= contextFrames)
+        {
+            throw new SwarmUserErrorException(
+                "The generated continuation is not longer than its selected video-frame context.");
+        }
+        string trimmed = g.CreateNode("TrimAudioDuration", new JObject()
+        {
+            ["audio"] = ClonePath(audio.Path),
+            ["start_index"] = contextFrames / fps,
+            ["duration"] = (totalFrames - contextFrames) / fps
+        });
+        return audio.WithPath(WorkflowGenerator.NodePath(trimmed, 0), WGNodeData.DT_AUDIO);
     }
 
     private static WGNodeData AppendAudio(WorkflowGenerator g, WGNodeData sourceAudio, WGNodeData generatedAudio,
