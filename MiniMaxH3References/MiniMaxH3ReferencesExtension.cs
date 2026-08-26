@@ -1009,7 +1009,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
 
         int changed = 0;
-        foreach (string nodeClass in new[] { "EmptyMiniMaxH3LatentAV", "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo" })
+        foreach (string nodeClass in new[] { "EmptyMiniMaxH3LatentAV", "SwarmEmptyMiniMaxH3LatentAV", "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo" })
         {
             g.RunOnNodesOfClass(nodeClass, (_, node) =>
             {
