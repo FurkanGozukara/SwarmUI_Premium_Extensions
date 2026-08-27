@@ -235,7 +235,7 @@ PromptTokenEstimators.push({
         if (!H3) {
             return null;
         }
-        let spec = { prompt: ctx.prompt, pipeline: 'core', refImages: [], refVideos: [], refAudios: [], keyframeImages: 0, audioGuide: false };
+        let spec = { prompt: ctx.prompt, pipeline: 'core', refImages: [], refVideos: [], refAudios: [], keyframeImages: 0, keyframeVideoFrames: 0, audioGuide: false };
         let label;
         let approximate = false;
         // Init Audio (extension group): the whole soundtrack becomes a t=1 guide and, by default, sets the length.
@@ -265,8 +265,18 @@ PromptTokenEstimators.push({
             spec.width = width;
             spec.height = height;
             spec.frames = H3.alignFrames(Number(ctx.param('videoframes')) || 124);
-            spec.keyframeImages = 1 + (ctx.param('videoendimage') ? 1 : 0);
-            label = 'image to video';
+            let continuationFrames = ctx.param('continuefromlastvideoframes')
+                ? Math.max(1, Math.trunc(Number(ctx.param('continuationcontextframes')) || 1))
+                : 1;
+            if (continuationFrames > 1) {
+                spec.keyframeVideoFrames = continuationFrames;
+                spec.keyframeImages = ctx.param('videoendimage') ? 1 : 0;
+                label = 'video continuation';
+            }
+            else {
+                spec.keyframeImages = 1 + (ctx.param('videoendimage') ? 1 : 0);
+                label = 'image to video';
+            }
         }
         else {
             let audioOnly = ctx.param('minimaxhaudioonly') === true;
@@ -369,12 +379,9 @@ class PromptTokenMeterController {
 
     /** {estimator, stage, compat} for the current model selection, or null. */
     activeEstimator() {
-        let baseCompat = typeof currentModelHelper !== 'undefined' ? currentModelHelper.curCompatClass : null;
-        for (let estimator of PromptTokenEstimators) {
-            if (estimator.matches(baseCompat)) {
-                return { estimator: estimator, stage: 'base', compat: baseCompat };
-            }
-        }
+        // A checked Image To Video group produces the final media, even when the
+        // base model also happens to be MiniMax H3. Prefer that active video stage
+        // so its canvas, frame count, keyframes, and continuation context drive the meter.
         let videoModelName = promptParamValue('videomodel');
         if (videoModelName) {
             let data = typeof modelsHelpers !== 'undefined' ? modelsHelpers.getDataFor('Stable-Diffusion', videoModelName) : null;
@@ -383,6 +390,12 @@ class PromptTokenMeterController {
                 if (estimator.matches(`${compat}`)) {
                     return { estimator: estimator, stage: 'video', compat: `${compat}` };
                 }
+            }
+        }
+        let baseCompat = typeof currentModelHelper !== 'undefined' ? currentModelHelper.curCompatClass : null;
+        for (let estimator of PromptTokenEstimators) {
+            if (estimator.matches(baseCompat)) {
+                return { estimator: estimator, stage: 'base', compat: baseCompat };
             }
         }
         return null;
@@ -1241,11 +1254,15 @@ class MiniMaxH3PromptReferences {
             video: current.video.length,
             audio: current.audio.length,
         };
-        let tokenRegex = /(?<![\w@])@(image|img|picture|pic|video|vid|audio|aud|sound)#?(\d{1,2})(?![0-9a-zA-Z])|<(Picture|Video|Audio)[ ]?(\d{1,2})>/gi;
+        // Fold the extra Unicode forms JavaScript case-insensitive matching does not
+        // consistently equate with ASCII. Every replacement is one UTF-16 code unit,
+        // so match offsets still address the user's original prompt exactly.
+        let matchText = text.replace(/[\u0130\u0131]/g, 'i').replace(/\u017f/g, 's');
+        let tokenRegex = /(?<![0-9A-Za-z_@])@[ \t]*(image|img|picture|pic|video|vid|audio|aud|sound)[ \t]*#?[ \t]*(\d{1,2})(?![0-9A-Za-z])|<[ \t]*(image|img|picture|pic|video|vid|audio|aud|sound)[ \t]*#?[ \t]*(\d{1,2})[ \t]*>/gi;
         let html = '';
         let last = 0;
         let match;
-        while ((match = tokenRegex.exec(text)) !== null) {
+        while ((match = tokenRegex.exec(matchText)) !== null) {
             html += minimaxH3EscapeText(text.substring(last, match.index));
             last = match.index + match[0].length;
             let type, n;
@@ -1255,8 +1272,7 @@ class MiniMaxH3PromptReferences {
                 n = parseInt(match[2]);
             }
             else {
-                let label = match[3].toLowerCase();
-                type = label === 'picture' ? 'image' : label;
+                type = MiniMaxH3AliasToType[match[3].toLowerCase()];
                 n = parseInt(match[4]);
                 legacyAudio = type === 'audio';
             }
@@ -1283,7 +1299,7 @@ class MiniMaxH3PromptReferences {
             }
             let cls = valid ? 'minimax-h3-token' : 'minimax-h3-token minimax-h3-token-invalid';
             let style = valid ? ` style="--minimax-ref-color:${color};"` : '';
-            html += `<span class="${cls}"${style}>${minimaxH3EscapeText(match[0])}</span>`;
+            html += `<span class="${cls}"${style}>${minimaxH3EscapeText(text.substring(match.index, last))}</span>`;
         }
         html += minimaxH3EscapeText(text.substring(last));
         this.overlayInner.innerHTML = html + String.fromCharCode(0x200b);

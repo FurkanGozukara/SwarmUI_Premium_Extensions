@@ -78,7 +78,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.13.2";
+        Version = "1.13.3";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -1096,35 +1096,85 @@ public class MiniMaxH3ReferencesExtension : Extension
     }
 
     private static readonly Regex PromptReferenceTokenMatcher = new(
-        @"(?<![\w@])@(?<type>image|img|picture|pic|video|vid|audio|aud|sound)#?(?<num>\d{1,2})(?![0-9A-Za-z])",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        @"(?<![0-9A-Za-z_@])@[ \t]*(?<type>image|img|picture|pic|video|vid|audio|aud|sound)[ \t]*#?[ \t]*(?<num>\d{1,2})(?![0-9A-Za-z])",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static readonly Regex NativePromptReferenceTokenMatcher = new(
+        @"<[ \t]*(?<type>image|img|picture|pic|video|vid|audio|aud|sound)[ \t]*#?[ \t]*(?<num>\d{1,2})[ \t]*>",
+        RegexOptions.Compiled | RegexOptions.IgnoreCase | RegexOptions.CultureInvariant);
+
+    private static string FoldReferenceTokenText(string text)
+    {
+        return text.Replace('\u0130', 'I').Replace('\u0131', 'i').Replace('\u017f', 's');
+    }
+
+    private static string CanonicalReferenceType(string type)
+    {
+        return FoldReferenceTokenText(type).ToLowerInvariant() switch
+        {
+            "image" or "img" or "picture" or "pic" => "image",
+            "video" or "vid" => "video",
+            _ => "audio",
+        };
+    }
+
+    private static string NormalizeNativePromptReferenceTokens(string prompt)
+    {
+        if (string.IsNullOrEmpty(prompt) || !prompt.Contains('<'))
+        {
+            return prompt;
+        }
+        string matchable = FoldReferenceTokenText(prompt);
+        StringBuilder result = new(prompt.Length);
+        int last = 0;
+        foreach (Match match in NativePromptReferenceTokenMatcher.Matches(matchable))
+        {
+            result.Append(prompt, last, match.Index - last);
+            last = match.Index + match.Length;
+            string label = CanonicalReferenceType(match.Groups["type"].Value) switch
+            {
+                "image" => "Picture",
+                "video" => "Video",
+                _ => "Audio",
+            };
+            int number = int.Parse(match.Groups["num"].Value, CultureInfo.InvariantCulture);
+            result.Append($"<{label} {number}>");
+        }
+        result.Append(prompt, last, prompt.Length - last);
+        return result.ToString();
+    }
 
     /// <summary>
     /// Translates prompt-bar "@image1" / "@video2" / "@audio3" reference tokens into the
     /// "&lt;Picture 1&gt;" / "&lt;Video 2&gt;" / "&lt;Audio n&gt;" labels the MiniMax H3 node expects.
     /// Audio labels index video soundtracks first, so standalone audio tokens are offset by the
-    /// video count (and by the legacy audio reference, when present). Legacy labels typed directly
-    /// in the prompt pass through unchanged. In audio-only mode video tokens map to the corresponding
-    /// audio labels because only the soundtrack is conditioned.
+    /// video count (and by the legacy audio reference, when present). Native labels typed directly
+    /// in the prompt are normalized to the exact case and spacing expected by MiniMax. In audio-only
+    /// mode video tokens map to the corresponding audio labels because only the soundtrack is conditioned.
     /// Tokens that point at a missing reference (eg '@image3'
     /// with two images attached) are silently omitted, together with one adjacent space, so a stale
     /// token left in the prompt never blocks generation.
     /// </summary>
     public static string TranslatePromptReferenceTokens(string prompt, int imageCount, int videoCount, int standaloneAudioCount, int audioLabelOffset, bool audioOnly = false)
     {
-        if (string.IsNullOrEmpty(prompt) || !prompt.Contains('@'))
+        if (string.IsNullOrEmpty(prompt))
         {
             return prompt;
+        }
+        string matchable = FoldReferenceTokenText(prompt);
+        if (!matchable.Contains('@'))
+        {
+            return NormalizeNativePromptReferenceTokens(prompt);
         }
         StringBuilder result = new(prompt.Length);
         List<string> omitted = [];
         int last = 0;
-        foreach (Match match in PromptReferenceTokenMatcher.Matches(prompt))
+        foreach (Match match in PromptReferenceTokenMatcher.Matches(matchable))
         {
             result.Append(prompt, last, match.Index - last);
             last = match.Index + match.Length;
-            string type = match.Groups["type"].Value.ToLowerInvariant();
-            int number = int.Parse(match.Groups["num"].Value);
+            string type = CanonicalReferenceType(match.Groups["type"].Value);
+            int number = int.Parse(match.Groups["num"].Value, CultureInfo.InvariantCulture);
             (string label, int count, int offset) = type switch
             {
                 "image" or "img" or "picture" or "pic" => ("Picture", imageCount, 0),
@@ -1136,7 +1186,7 @@ public class MiniMaxH3ReferencesExtension : Extension
                 result.Append($"<{label} {offset + number}>");
                 continue;
             }
-            omitted.Add(match.Value);
+            omitted.Add(prompt.Substring(match.Index, match.Length));
             if (last < prompt.Length && prompt[last] == ' ')
             {
                 last++;
@@ -1151,7 +1201,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         {
             Logs.Info($"MiniMax H3 References is ignoring prompt reference token(s) with no matching attachment: {string.Join(", ", omitted)}");
         }
-        return result.ToString();
+        return NormalizeNativePromptReferenceTokens(result.ToString());
     }
 
     /// <summary>

@@ -205,8 +205,9 @@ token, eg `@image1`. Mention attachments in the prompt in any of these ways:
 
 - Type `@` in the prompt box and pick from the autocomplete list
 - Click an attachment card to insert its token at the cursor
-- Type the token by hand: `@image1`, `@video2`, `@audio1` (aliases like
-  `@img1`, `@pic1`, `@vid2`, `@sound1`, and `@image#1` also work)
+- Type the token by hand: `@image1`, `@video2`, `@audio1` (case is ignored;
+  aliases and harmless spacing such as `@IMG # 1`, `@ picture 1`, `@vid2`,
+  and `@sound1` also work)
 
 Tokens render as colored pills in the prompt bar, matching their attachment
 card's color. Attachment numbering follows card position: drag cards
@@ -221,4 +222,7 @@ past video soundtracks automatically). With `@video1` and standalone `@audio1`
 attached, use `<Audio 1>` for `@video1`'s soundtrack; `@audio1` remains the
 standalone file and is translated to `<Audio 2>`. In audio-only mode, video
 tokens become audio tokens because only their soundtracks are used. Typing
-those legacy labels directly still works and they get the same colored pills.
+Typing those native labels directly also works, and they get the same colored pills.
+Case, spacing, optional `#`, and the same aliases are normalized before the
+prompt reaches MiniMax, so `<picture1>`, `<PICTURE 1>`, and `< image #01 >`
+all become the exact model label `<Picture 1>`.
