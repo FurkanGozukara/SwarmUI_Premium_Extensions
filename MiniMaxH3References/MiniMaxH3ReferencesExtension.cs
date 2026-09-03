@@ -30,6 +30,8 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<bool> SpeedOptimize;
     private static T2IRegisteredParam<double> SpeedCacheThreshold;
     private static T2IRegisteredParam<string> SpeedSparseAttention;
+    private static T2IRegisteredParam<double> VideoSigmaShift;
+    private static T2IRegisteredParam<double> AudioSigmaShift;
     private static T2IRegisteredParam<bool> AudioOnly;
     private static T2IRegisteredParam<bool> LowVram;
     private static T2IRegisteredParam<bool> LowVramMaxSaving;
@@ -60,6 +62,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3SpeedOptimizer node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string SpeedFeatureId = "minimax_h3_speed";
 
+    /// <summary>Feature id advertised when the backend has MiniMax H3's separate video/audio sigma-shift node.</summary>
+    public const string SamplingShiftFeatureId = "minimax_h3_sampling_shifts";
+
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMaxH3LowVRAM node (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string LowVramFeatureId = "minimax_h3_low_vram";
 
@@ -76,9 +81,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
+        Description = "Adds the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.13.3";
+        Version = "1.14.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -97,6 +102,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         StyleSheetFiles.Add("Assets/minimax_h3_prompt_references.css");
         // Advertise these features only when the backend actually has the matching node.
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3SpeedOptimizer"] = SpeedFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3SigmaShift"] = SamplingShiftFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3LowVRAM"] = LowVramFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3FaceStitch"] = FaceInpaintFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesMiniMaxH3InitAudio"] = InitAudioFeatureId;
@@ -110,6 +116,9 @@ public class MiniMaxH3ReferencesExtension : Extension
         T2IAPI.AlwaysTopKeys.Add(AudioOnly.Type.ID);
         T2IParamTypes.FakeTypeProviders.Add(AudioOnlyParamType);
         WorkflowGenerator.AddStep(ApplyReferences, -7.9);
+        // Run once after the base model load and again after optional video/extend model loads.
+        // The second pass is a no-op for nodes already carrying the requested values.
+        WorkflowGenerator.AddStep(ApplySamplingShiftOverrides, -7.85);
         WorkflowGenerator.AddStep(ApplyAudioOnlyCanvas, -7.8);
         WorkflowGenerator.AddModelGenStep(ApplyAudioOnlyModelRouting, -3.6);
         WorkflowGenerator.AddModelGenStep(ApplySpeedOptimizations, -3.5);
@@ -125,6 +134,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(SaveAudioOnlyLossless, 9.9);
         // after both the base (10) and Image To Video (11) saves: put the user's own audio on the file
         WorkflowGenerator.AddStep(UseInitAudioAsOutputSoundtrack, 11.5);
+        WorkflowGenerator.AddStep(ApplySamplingShiftOverrides, 99);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
     }
@@ -177,6 +187,16 @@ public class MiniMaxH3ReferencesExtension : Extension
             "Sol-Attn sparse attention mode for the MiniMax H3 4x Speed parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
             "auto", GetValues: _ => ["auto", "enabled", "disabled"], IsAdvanced: true,
             FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 16.5));
+        VideoSigmaShift = T2IParamTypes.Register<double>(new(
+            "MiniMax H3 Video Shift",
+            "Override the sigma shift for MiniMax H3's video stream. Leave this disabled to keep SwarmUI's automatic model value (normally 12). If both this and the generic Sigma Shift are enabled, this explicit video value takes precedence for MiniMax H3.",
+            "12", Min: 0, Max: 100, Step: 0.01, ViewMax: 20, Toggleable: true, IsAdvanced: true,
+            FeatureFlag: SamplingShiftFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: -20.9));
+        AudioSigmaShift = T2IParamTypes.Register<double>(new(
+            "MiniMax H3 Audio Shift",
+            "Override the sigma shift for MiniMax H3's audio stream. Leave this disabled to keep SwarmUI's automatic model value (normally 3).",
+            "3", Min: 0, Max: 100, Step: 0.01, ViewMax: 20, Toggleable: true, IsAdvanced: true,
+            FeatureFlag: SamplingShiftFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: -20.8));
         // Sits at the bottom of the Core Parameters group (everything else there is negative).
         LowVram = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 Low VRAM",
@@ -822,6 +842,54 @@ public class MiniMaxH3ReferencesExtension : Extension
         });
         g.LoadingModel = [lowVram, 0];
         Logs.Info($"MiniMax H3 Low VRAM enabled ({(exact ? "exact output only" : "maximum saving, attention head grouping allowed to change the result")}).");
+    }
+
+    /// <summary>Override either side of every MiniMax H3 joint audio/video sampling-shift node in the workflow.</summary>
+    private static void ApplySamplingShiftOverrides(WorkflowGenerator g)
+    {
+        bool overrideVideo = g.UserInput.TryGet(VideoSigmaShift, out double videoShift);
+        bool overrideAudio = g.UserInput.TryGet(AudioSigmaShift, out double audioShift);
+        if (!overrideVideo && !overrideAudio)
+        {
+            return;
+        }
+
+        int changedNodes = 0;
+        g.RunOnNodesOfClass("MiniMaxH3SigmaShift", (_, node) =>
+        {
+            if (node["inputs"] is not JObject inputs)
+            {
+                return;
+            }
+            bool changed = false;
+            if (overrideVideo && (!inputs.TryGetValue("shift_video", out JToken currentVideo) || currentVideo.Value<double>() != videoShift))
+            {
+                inputs["shift_video"] = videoShift;
+                changed = true;
+            }
+            if (overrideAudio && (!inputs.TryGetValue("shift_audio", out JToken currentAudio) || currentAudio.Value<double>() != audioShift))
+            {
+                inputs["shift_audio"] = audioShift;
+                changed = true;
+            }
+            if (changed)
+            {
+                changedNodes++;
+            }
+        });
+        if (changedNodes > 0)
+        {
+            List<string> values = [];
+            if (overrideVideo)
+            {
+                values.Add($"video {videoShift.ToString("0.##", CultureInfo.InvariantCulture)}");
+            }
+            if (overrideAudio)
+            {
+                values.Add($"audio {audioShift.ToString("0.##", CultureInfo.InvariantCulture)}");
+            }
+            Logs.Info($"Applied MiniMax H3 sampling shift override ({string.Join(", ", values)}) to {changedNodes} model node(s).");
+        }
     }
 
     private static void ApplyReferences(WorkflowGenerator g)

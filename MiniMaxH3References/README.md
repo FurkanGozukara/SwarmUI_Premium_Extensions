@@ -3,6 +3,19 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Video and Audio Shift (Advanced Sampling)
+
+Since v1.14.0, **MiniMax H3 Video Shift** and **MiniMax H3 Audio Shift** are
+available in SwarmUI's **Advanced Sampling** panel whenever a MiniMax H3 base
+model or Image To Video model is active. Both controls are optional: with their
+toggles off, SwarmUI keeps choosing the model defaults automatically (normally
+video `12` and audio `3`).
+
+Turn on either control to override only that stream. The explicit Video Shift
+takes precedence over SwarmUI's generic Sigma Shift for MiniMax H3. The values
+are applied to text-to-video, image-to-video, reference-to-video, Audio Only,
+and any additional MiniMax H3 model load in the same workflow.
+
 ## Live token meter (beside the prompt)
 
 Since v1.13.0 the reference toolbar shows the estimated packed-sequence length of the generation

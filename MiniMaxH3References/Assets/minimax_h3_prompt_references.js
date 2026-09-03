@@ -1960,11 +1960,22 @@ function minimaxH3InitAudioFeature() {
     return [add, remove];
 }
 
+/** Sampling shifts apply to a MiniMax H3 base model or to the optional MiniMax H3 Image To Video model. */
+function minimaxH3SamplingShiftFeature() {
+    let flag = 'minimax_h3_sampling_shifts';
+    let [add, remove] = minimaxH3NodeGatedFeature(flag);
+    if (remove.includes(flag) && minimaxH3VideoModelSelected()) {
+        return [[flag], []];
+    }
+    return [add, remove];
+}
+
 if (typeof featureSetChangers != 'undefined') {
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_speed'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_low_vram'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_face_inpaint'));
     featureSetChangers.push(() => minimaxH3InitAudioFeature());
+    featureSetChangers.push(() => minimaxH3SamplingShiftFeature());
     // re-evaluate when the Image To Video model or group toggle changes (the core only re-evaluates on base model
     // changes); delegated so it also works when the parameter inputs are (re)built after this script loads
     document.addEventListener('change', (event) => {
