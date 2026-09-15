@@ -1,0 +1,609 @@
+/* SECourses Prompt Media: model-agnostic prompt attachment toolbar, cards, waveform audio player,
+   drop highlight and the shared trim popup. Card rules apply only while the generic uploader is
+   active (.secourses-prompt-media-active on the prompt region); the MiniMax H3 uploader keeps its
+   own look while a MiniMax H3 model is selected. */
+
+/* ==================== Toolbar ==================== */
+
+.secourses-prompt-media-toolbar {
+    align-items: center;
+    display: none;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin: 0 0 0.4rem 0;
+}
+
+.basic-button.secourses-prompt-media-add,
+.basic-button.secourses-prompt-media-browse,
+.basic-button.secourses-prompt-media-clear {
+    border-radius: 6px !important;
+    min-height: 2rem;
+    padding: 0.25rem 0.75rem;
+}
+
+.basic-button.secourses-prompt-media-trim {
+    background: #14805e;
+    border: 1px solid #1db98a;
+    border-radius: 6px !important;
+    color: #fff;
+    min-height: 2rem;
+    padding: 0.25rem 0.75rem;
+}
+
+.basic-button.secourses-prompt-media-trim:hover {
+    background: #199a72;
+    color: #fff;
+}
+
+.basic-button.secourses-prompt-media-clear {
+    border-color: color-mix(in srgb, var(--red, #d9534f) 60%, var(--button-border));
+    color: color-mix(in srgb, var(--red, #d9534f) 75%, var(--button-text));
+}
+
+.basic-button.secourses-prompt-media-clear:hover {
+    background: color-mix(in srgb, var(--red, #d9534f) 70%, black);
+    color: #fff;
+}
+
+.secourses-prompt-media-status {
+    color: color-mix(in srgb, var(--text) 72%, var(--background));
+    font-size: 0.82rem;
+    white-space: normal;
+}
+
+.secourses-prompt-media-status-empty {
+    color: color-mix(in srgb, var(--text) 55%, var(--background));
+    font-style: italic;
+}
+
+.secourses-prompt-media-hint {
+    border: 1px dashed var(--light-border);
+    border-radius: 1rem;
+    color: color-mix(in srgb, var(--text) 62%, var(--background));
+    font-size: 0.75rem;
+    padding: 0.1rem 0.6rem;
+    white-space: normal;
+}
+
+.secourses-prompt-media-hint[data-level="ok"] {
+    border-color: color-mix(in srgb, #1db98a 65%, var(--light-border));
+    color: #1db98a;
+}
+
+.secourses-prompt-media-hint[data-level="warn"] {
+    border-color: color-mix(in srgb, #ffa94d 75%, var(--light-border));
+    border-style: solid;
+    color: #ffa94d;
+    font-weight: 600;
+}
+
+.secourses-prompt-media-file-input {
+    display: none !important;
+}
+
+/* The toolbar has its own clear button; the core's inline one only shows for the MiniMax H3 uploader. */
+.secourses-prompt-media-active .image-clear-button {
+    display: none !important;
+}
+
+.secourses-prompt-media-active .alt-prompt-added-image-area {
+    display: block;
+    max-width: 100%;
+}
+
+/* Room for the core's token counter, which floats above the prompt line. */
+.secourses-prompt-media-active .alt-prompt-added-image-area:not(:empty) {
+    padding-bottom: 1.1rem;
+}
+
+/* Drop highlight: the core marks the prompt region while image / video / audio files are dragged over the page. */
+.secourses-prompt-media-active.drag_image_target_highlight {
+    border-radius: 8px;
+    box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--emphasis, #7d5698) 85%, transparent), inset 0 0 18px 2px color-mix(in srgb, var(--emphasis, #7d5698) 35%, transparent);
+}
+
+.secourses-prompt-media-active.drag_image_target_highlight::after {
+    background: color-mix(in srgb, var(--emphasis, #7d5698) 85%, var(--background));
+    border-radius: 1rem;
+    color: #fff;
+    content: "Drop to attach to the prompt";
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 0.2rem 0.7rem;
+    left: 50%;
+    pointer-events: none;
+    position: absolute;
+    top: -0.85rem;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    z-index: 5;
+}
+
+/* ==================== Attachment cards ==================== */
+
+.secourses-prompt-media-active .secourses-media-card {
+    background: color-mix(in srgb, var(--background) 82%, var(--light-border));
+    border: 1px solid color-mix(in srgb, var(--secourses-media-color, var(--light-border)) 55%, var(--light-border));
+    border-radius: 8px;
+    box-sizing: border-box;
+    cursor: grab;
+    display: inline-flex;
+    flex-direction: column;
+    gap: 0.3rem;
+    margin: 2px 4px 2px 0;
+    min-width: 0;
+    overflow: hidden;
+    padding: 0.3rem;
+    position: relative;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    vertical-align: top;
+    width: 13rem;
+}
+
+.secourses-prompt-media-active .secourses-media-card:hover {
+    border-color: color-mix(in srgb, var(--secourses-media-color, var(--emphasis)) 80%, var(--light-border));
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--secourses-media-color, var(--emphasis)) 45%, transparent), 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.secourses-prompt-media-active .secourses-media-card[data-secourses-role="source"] {
+    border-color: color-mix(in srgb, #1db98a 80%, var(--light-border));
+}
+
+.secourses-media-card-dragging {
+    opacity: 0.45;
+}
+
+.secourses-media-drop-before {
+    box-shadow: -4px 0 0 0 var(--emphasis, #7d5698) !important;
+}
+
+.secourses-media-drop-after {
+    box-shadow: 4px 0 0 0 var(--emphasis, #7d5698) !important;
+}
+
+/* The core header becomes a zero-height overlay: its text is replaced by the badge row, its two buttons float top-right. */
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-header {
+    height: 0;
+    inset: 0 0 auto 0;
+    min-width: 0;
+    padding: 0;
+    position: absolute;
+    width: auto;
+    z-index: 3;
+}
+
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-header-text {
+    display: none;
+}
+
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button,
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button {
+    align-items: center;
+    background: rgba(0, 0, 0, 0.6);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    box-sizing: border-box;
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    font-size: 0.9rem;
+    font-weight: bold;
+    height: 1.45rem;
+    justify-content: center;
+    line-height: 1;
+    opacity: 0;
+    padding: 0;
+    position: absolute;
+    top: 0.5rem;
+    transition: opacity 0.15s ease, background 0.15s ease;
+    width: 1.45rem;
+}
+
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button {
+    right: 2.15rem;
+}
+
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button {
+    right: 0.5rem;
+}
+
+.secourses-prompt-media-active .secourses-media-card:hover .alt-prompt-image-container-menu-button,
+.secourses-prompt-media-active .secourses-media-card:hover .alt-prompt-image-container-remove-button {
+    opacity: 0.95;
+}
+
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button:hover {
+    background: color-mix(in srgb, var(--emphasis, #7d5698) 80%, black);
+    border-color: #fff;
+}
+
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button:hover {
+    background: color-mix(in srgb, var(--red, #d9534f) 80%, black) !important;
+    border-color: #fff;
+}
+
+@media (hover: none) {
+    .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button,
+    .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button {
+        opacity: 0.9;
+    }
+}
+
+/* Media previews: one fixed frame per card so cards line up regardless of aspect ratio. */
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image {
+    align-self: stretch;
+    background: color-mix(in srgb, var(--background) 55%, #000);
+    border-radius: 6px;
+    display: block;
+    height: 6.25rem;
+    margin: 0;
+    max-height: none;
+    max-width: 100%;
+    object-fit: contain;
+    width: 100%;
+}
+
+.secourses-prompt-media-active .secourses-media-card audio.alt-prompt-image {
+    display: none;
+}
+
+.secourses-prompt-media-active .secourses-media-card.image-drop-replace-target .alt-prompt-image,
+.secourses-prompt-media-active .secourses-media-card.image-drop-replace-target .secourses-audio-player {
+    outline: 3px solid var(--emphasis, #7d5698);
+    outline-offset: -3px;
+}
+
+.secourses-media-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    min-width: 0;
+}
+
+.secourses-media-badge-row {
+    align-items: center;
+    display: flex;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
+.secourses-media-badge {
+    background: color-mix(in srgb, var(--secourses-media-color, var(--emphasis)) 22%, var(--background));
+    border-radius: 4px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, var(--secourses-media-color, var(--emphasis)) 60%, transparent);
+    color: var(--secourses-media-color, var(--text));
+    flex-shrink: 0;
+    font-family: monospace;
+    font-size: 0.74rem;
+    font-weight: 600;
+    line-height: 1.2;
+    padding: 0.12rem 0.4rem;
+    white-space: nowrap;
+}
+
+.secourses-media-role {
+    background: color-mix(in srgb, #1db98a 22%, var(--background));
+    border-radius: 4px;
+    box-shadow: 0 0 0 1px color-mix(in srgb, #1db98a 65%, transparent);
+    color: #1db98a;
+    flex-shrink: 0;
+    font-size: 0.66rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    padding: 0.12rem 0.35rem;
+    text-transform: uppercase;
+    white-space: nowrap;
+}
+
+.secourses-media-meta {
+    color: color-mix(in srgb, var(--text) 62%, var(--background));
+    flex-shrink: 1;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    margin-left: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.secourses-media-mute {
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 0.8rem;
+    line-height: 1;
+    opacity: 0.8;
+    padding: 0 0.15rem;
+}
+
+.secourses-media-mute:hover {
+    opacity: 1;
+}
+
+.secourses-media-name {
+    color: color-mix(in srgb, var(--text) 72%, var(--background));
+    display: block;
+    font-size: 0.7rem;
+    line-height: 1.2;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* ==================== Waveform audio player ==================== */
+
+.secourses-audio-player {
+    align-items: center;
+    background: color-mix(in srgb, var(--background) 55%, #000);
+    border-radius: 6px;
+    box-sizing: border-box;
+    cursor: default;
+    display: flex;
+    gap: 0.45rem;
+    height: 6.25rem;
+    padding: 0.5rem 0.5rem;
+    width: 100%;
+}
+
+.secourses-audio-play {
+    align-items: center;
+    background: var(--secourses-media-color, #fcc419);
+    border: none;
+    border-radius: 50%;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+    color: #1b1b1b;
+    cursor: pointer;
+    display: flex;
+    flex-shrink: 0;
+    font-size: 0.95rem;
+    height: 2.5rem;
+    justify-content: center;
+    line-height: 1;
+    padding: 0 0 0 0.15rem;
+    transition: transform 0.1s ease, filter 0.15s ease;
+    width: 2.5rem;
+}
+
+.secourses-audio-play:hover {
+    filter: brightness(1.12);
+    transform: scale(1.06);
+}
+
+.secourses-audio-playing .secourses-audio-play {
+    padding: 0;
+}
+
+.secourses-audio-wave {
+    cursor: pointer;
+    flex: 1;
+    height: 100%;
+    min-width: 0;
+    position: relative;
+}
+
+.secourses-audio-wave canvas {
+    display: block;
+    height: 100%;
+    width: 100%;
+}
+
+.secourses-audio-time {
+    background: rgba(0, 0, 0, 0.5);
+    border-radius: 3px;
+    bottom: 0;
+    color: rgba(255, 255, 255, 0.88);
+    font-family: monospace;
+    font-size: 0.62rem;
+    line-height: 1.3;
+    padding: 0 0.25rem;
+    pointer-events: none;
+    position: absolute;
+    right: 0.1rem;
+}
+
+/* ==================== Shared trim popup ==================== */
+
+.secourses-trim-modal {
+    align-items: center;
+    background: rgba(0, 0, 0, 0.55);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    position: fixed;
+    z-index: 10000;
+}
+
+.secourses-trim-panel {
+    background: var(--background);
+    border: 1px solid var(--light-border);
+    border-radius: 8px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+    color: var(--text);
+    display: flex;
+    flex-direction: column;
+    gap: 0.6rem;
+    max-height: 92vh;
+    max-width: min(94vw, 46rem);
+    overflow: auto;
+    padding: 0.8rem;
+    width: 46rem;
+}
+
+.secourses-trim-head {
+    align-items: center;
+    display: flex;
+    gap: 0.6rem;
+}
+
+.secourses-trim-title {
+    color: #1db98a;
+    font-weight: 700;
+    white-space: nowrap;
+}
+
+.secourses-trim-filename {
+    color: color-mix(in srgb, var(--text) 70%, var(--background));
+    flex: 1;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.secourses-trim-close {
+    background: none;
+    border: none;
+    color: var(--text);
+    cursor: pointer;
+    font-size: 1.3rem;
+    line-height: 1;
+    padding: 0 0.3rem;
+}
+
+.secourses-trim-preview {
+    display: flex;
+    justify-content: center;
+}
+
+.secourses-trim-media-video {
+    background: #000;
+    border-radius: 6px;
+    max-height: 46vh;
+    max-width: 100%;
+}
+
+.secourses-trim-media-audio {
+    width: 100%;
+}
+
+.secourses-trim-track {
+    background: color-mix(in srgb, var(--background) 70%, var(--light-border));
+    border: 1px solid var(--light-border);
+    border-radius: 6px;
+    cursor: pointer;
+    height: 2.1rem;
+    position: relative;
+    touch-action: none;
+}
+
+.secourses-trim-fill {
+    background: color-mix(in srgb, #1db98a 38%, transparent);
+    border-radius: 5px;
+    bottom: 0;
+    position: absolute;
+    top: 0;
+}
+
+.secourses-trim-playhead {
+    background: var(--text);
+    bottom: 0;
+    opacity: 0.85;
+    pointer-events: none;
+    position: absolute;
+    top: 0;
+    width: 2px;
+}
+
+.secourses-trim-handle {
+    background: #1db98a;
+    border: 1px solid color-mix(in srgb, #1db98a 55%, #000);
+    border-radius: 4px;
+    bottom: -0.3rem;
+    cursor: ew-resize;
+    position: absolute;
+    top: -0.3rem;
+    touch-action: none;
+    transform: translateX(-50%);
+    width: 0.8rem;
+    z-index: 2;
+}
+
+.secourses-trim-fields {
+    align-items: center;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.secourses-trim-label {
+    align-items: center;
+    display: inline-flex;
+    font-size: 0.82rem;
+    gap: 0.35rem;
+}
+
+.secourses-trim-input {
+    background: var(--background);
+    border: 1px solid var(--light-border);
+    border-radius: 4px;
+    color: var(--text);
+    padding: 0.15rem 0.3rem;
+    width: 5.2rem;
+}
+
+.basic-button.secourses-trim-tool {
+    border-radius: 5px !important;
+    font-size: 0.8rem;
+    padding: 0.2rem 0.55rem;
+}
+
+.secourses-trim-length {
+    color: color-mix(in srgb, var(--text) 65%, var(--background));
+    font-size: 0.8rem;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
+.secourses-trim-length-active {
+    color: #1db98a;
+    font-weight: 600;
+}
+
+.secourses-trim-actions {
+    align-items: center;
+    border-top: 1px solid var(--light-border);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    padding-top: 0.6rem;
+}
+
+.basic-button.secourses-trim-add {
+    background: #14805e;
+    border: 1px solid #1db98a;
+    border-radius: 6px !important;
+    color: #fff;
+}
+
+.basic-button.secourses-trim-add:hover {
+    background: #199a72;
+    color: #fff;
+}
+
+.basic-button.secourses-trim-add:disabled {
+    cursor: wait;
+    opacity: 0.6;
+}
+
+.secourses-trim-note {
+    color: color-mix(in srgb, var(--text) 65%, var(--background));
+    font-size: 0.8rem;
+}
+
+@media (max-width: 700px) {
+    .secourses-prompt-media-toolbar {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .secourses-prompt-media-active .secourses-media-card {
+        width: 10.5rem;
+    }
+
+    .secourses-prompt-media-active .secourses-media-card .alt-prompt-image {
+        height: 5rem;
+    }
+}

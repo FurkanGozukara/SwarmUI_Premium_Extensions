@@ -3,6 +3,32 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Prompt media uploader for every model (since 1.15.0)
+
+The prompt attachment area is upgraded for every model, not only MiniMax H3. SwarmUI's own prompt media
+(`promptimages` / `promptvideos` / `promptaudios`: the attachments used by LTX 2.5 Audio To Video, the LTX-2
+voice reference, Kontext / IP-Adapter images and so on) stays exactly what the core sends; the extension adds
+the missing interface around it (`Assets/secourses_prompt_media.js` and `.css`, loaded before the MiniMax H3
+script):
+
+- A toolbar above the prompt: **Add Image / Video / Audio** (several files at once, type detected from the
+  MIME type or the extension), **Select From Inputs** (SwarmUI's inputs browser, persistent files), **Add With
+  Trim** (one video or audio with an exact start/end window: audio is cut sample-accurately in the browser to a
+  WAV, video is trimmed on the server through SwarmUI's video editor API and the saved `inputs/edited_video`
+  file is attached), **Clear**, an attachment count and a context hint.
+- Real cards instead of the native 128 px thumbnails: audio gets a waveform player (play/pause, click to seek,
+  elapsed / total time), video a preview with hover controls and a mute toggle, images a fixed frame; every card
+  shows its type and number (`Audio 1`), duration / resolution and filename, with the core's ☰ menu (Split
+  Audio, Advanced Video Editor, Remove) and × on hover.
+- Drag cards left/right to reorder attachments of the same type; the card order is the order SwarmUI sends.
+- Paste video and audio files into the prompt box (the core only pasted images); drag and drop keeps working,
+  with a clearer drop highlight.
+- LTX 2.5 Audio To Video: while that parameter is on, the first audio card is marked **source audio** and the
+  toolbar says which attachment the video follows, or warns when no audio is attached yet.
+
+The MiniMax H3 reference uploader described below is unchanged and takes over while a MiniMax H3 model is
+selected; both uploaders share the trim popup (`SECoursesTrimPopup`).
+
 ## Video and Audio Shift (Advanced Sampling)
 
 Since v1.14.0, **MiniMax H3 Video Shift** and **MiniMax H3 Audio Shift** are

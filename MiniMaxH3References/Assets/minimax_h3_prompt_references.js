@@ -502,19 +502,22 @@ class MiniMaxH3PromptReferences {
         }
     }
 
-    /** Builds a small thumbnail blob URL so cards never carry a full-resolution decode.
-     * Returns null when the image cannot be decoded (caller falls back to the data URL). */
+    /** Builds a small thumbnail blob URL so cards never carry a full-resolution decode: {url, width, height} with the
+     * source image's size. Returns null when the image cannot be decoded (caller falls back to the data URL). */
     async makeImageThumbnail(file, maxEdge = 384) {
         try {
             const bitmap = await createImageBitmap(file);
-            const scale = Math.min(1, maxEdge / Math.max(bitmap.width, bitmap.height));
+            const width = bitmap.width;
+            const height = bitmap.height;
+            const scale = Math.min(1, maxEdge / Math.max(width, height));
             const canvas = document.createElement('canvas');
-            canvas.width = Math.max(1, Math.round(bitmap.width * scale));
-            canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+            canvas.width = Math.max(1, Math.round(width * scale));
+            canvas.height = Math.max(1, Math.round(height * scale));
             canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
             bitmap.close();
-            return await new Promise(resolve => canvas.toBlob(
+            let url = await new Promise(resolve => canvas.toBlob(
                 blob => resolve(blob ? URL.createObjectURL(blob) : null), 'image/jpeg', 0.85));
+            return url ? { url: url, width: width, height: height } : null;
         }
         catch (error) {
             return null;
@@ -531,6 +534,8 @@ class MiniMaxH3PromptReferences {
         this.promptBox = document.getElementById('alt_prompt_textbox');
         this.addButton = document.getElementById('alt_text_add_button');
         this.clearButton = document.getElementById('alt_prompt_image_clear_button');
+        // The core relabels this button between versions ('Clear Images' / 'Clear Attachments'); restore its own text when inactive.
+        this.clearButtonDefaultText = this.clearButton ? this.clearButton.textContent : 'Clear Attachments';
         this.enabledInput = document.getElementById('input_minimaxhreferences');
         this.modelInput = document.getElementById('current_model');
         this.backendModelInput = document.getElementById('input_model');
@@ -766,7 +771,7 @@ class MiniMaxH3PromptReferences {
             ? 'Add MiniMax H3 prompt images, videos, or audio'
             : '';
         if (this.clearButton) {
-            this.clearButton.textContent = active ? 'Clear references' : 'Clear Images';
+            this.clearButton.textContent = active ? 'Clear references' : this.clearButtonDefaultText;
         }
         for (let id of [...this.videoInputIds, ...this.audioInputIds, this.trimsInputId]) {
             let input = document.getElementById(id);
@@ -836,8 +841,8 @@ class MiniMaxH3PromptReferences {
                 // A small thumbnail keeps the card (and its drag ghost, and every
                 // DOM move) light; the full-resolution data URL only lives in
                 // dataset.filedata for the generation request.
-                let preview = await this.makeImageThumbnail(file);
-                this.addImage(data, file.name, preview, storageFilename);
+                let thumbnail = await this.makeImageThumbnail(file);
+                this.addImage(data, file.name, thumbnail?.url ?? null, storageFilename, thumbnail ? `${thumbnail.width}x${thumbnail.height}` : null);
             }
             else {
                 this.addMedia(data, file.name, type, URL.createObjectURL(file), storageFilename);
@@ -858,32 +863,30 @@ class MiniMaxH3PromptReferences {
         });
     }
 
-    addImage(data, filename, preview = null, storageFilename = minimaxH3StorageFilename(filename)) {
-        let container = document.createElement('div');
-        container.className = 'alt-prompt-image-container';
+    addImage(data, filename, preview = null, storageFilename = minimaxH3StorageFilename(filename), resolution = null) {
+        // Build the card with the core's own function so its header (name text, menu, remove button) and
+        // updatePromptMediaTitles keep working (the core throws on header-less containers), then swap in the
+        // light thumbnail preview and record the display / storage names the way the reference cards do.
+        imagePromptAddImageData(data, 'image', data, storageFilename);
+        let images = this.referenceArea.querySelectorAll('img.alt-prompt-image');
+        let image = images[images.length - 1];
+        let container = image ? image.closest('.alt-prompt-image-container') : null;
+        if (!container || image.dataset.filedata !== data) {
+            return;
+        }
         container.dataset.filename = filename;
         container.dataset.storageFilename = storageFilename;
-
-        let remove = document.createElement('button');
-        remove.type = 'button';
-        remove.className = 'alt-prompt-image-container-remove-button';
-        remove.innerHTML = '&times;';
-        remove.title = 'Remove this prompt reference';
-        remove.addEventListener('click', () => {
-            container.remove();
-            autoRevealRevision();
-        });
-
-        let image = new Image();
-        image.src = preview || data;
-        image.height = 128;
-        image.className = 'alt-prompt-image';
-        image.dataset.filedata = data;
-        image.dataset.filename = storageFilename;
-        container.append(remove, image);
-        this.referenceArea.appendChild(container);
+        if (preview) {
+            // The core's own load listener records the thumbnail's size; restore the real image size after it.
+            image.addEventListener('load', () => {
+                if (resolution) {
+                    image.dataset.resolution = resolution;
+                    updatePromptMediaTitles();
+                }
+            }, { once: true });
+            image.src = preview;
+        }
         this.showReferenceArea();
-        showRevisionInputs(true);
     }
 
     addMedia(data, filename, type, preview = null, storageFilename = minimaxH3StorageFilename(filename)) {
@@ -1042,7 +1045,7 @@ class MiniMaxH3PromptReferences {
             if (!this.isActive()) {
                 return;
             }
-            if (event.target.closest('button, video, audio')) {
+            if (event.target.closest('button, video, audio, .alt-prompt-image-container-header')) {
                 return;
             }
             let list = this.collectReferences()[type];
@@ -1483,20 +1486,7 @@ class MiniMaxH3PromptReferences {
         }
     }
 
-    /** Minimum trim window; reference videos need a few frames at 24 FPS. */
-    trimMinRange() {
-        return this.trimPopup?.type === 'video' ? 0.25 : 0.05;
-    }
-
-    trimPopupIsTrimmed() {
-        let popup = this.trimPopup;
-        if (!popup?.duration) {
-            return false;
-        }
-        return popup.start > 0.01 || popup.end < popup.duration - 0.01;
-    }
-
-    /** Opens the single-file trim popup for one video or audio reference. */
+    /** Opens the single-file trim popup (the shared SECoursesTrimPopup) for one video or audio reference. */
     openTrimPopup(file) {
         let type = this.mediaType(file);
         if (type !== 'video' && type !== 'audio') {
@@ -1509,213 +1499,17 @@ class MiniMaxH3PromptReferences {
             return;
         }
         this.closeTrimPopup();
-        let modal = createDiv(null, 'minimax-h3-trim-modal');
-        let panel = createDiv(null, 'minimax-h3-trim-panel');
-
-        let head = createDiv(null, 'minimax-h3-trim-head');
-        let title = document.createElement('span');
-        title.className = 'minimax-h3-trim-title';
-        title.textContent = '✂ Trim Reference';
-        let name = document.createElement('span');
-        name.className = 'minimax-h3-trim-filename';
-        name.textContent = file.name;
-        name.title = file.name;
-        let close = document.createElement('button');
-        close.type = 'button';
-        close.className = 'minimax-h3-trim-close';
-        close.innerHTML = '&times;';
-        close.title = 'Close without adding';
-        head.append(title, name, close);
-
-        let preview = createDiv(null, 'minimax-h3-trim-preview');
-        let element = document.createElement(type);
-        element.className = `minimax-h3-trim-media minimax-h3-trim-media-${type}`;
-        element.controls = true;
-        element.preload = 'metadata';
-        if (type === 'video') {
-            element.playsInline = true;
-        }
-        let url = URL.createObjectURL(file);
-        element.src = url;
-        preview.appendChild(element);
-
-        let track = createDiv(null, 'minimax-h3-trim-track');
-        track.title = 'Click to seek the preview. Drag the handles to set the trim window.';
-        let fill = createDiv(null, 'minimax-h3-trim-fill');
-        let playhead = createDiv(null, 'minimax-h3-trim-playhead');
-        let startHandle = createDiv(null, 'minimax-h3-trim-handle minimax-h3-trim-handle-start');
-        startHandle.title = 'Drag to set the trim start';
-        let endHandle = createDiv(null, 'minimax-h3-trim-handle minimax-h3-trim-handle-end');
-        endHandle.title = 'Drag to set the trim end';
-        track.append(fill, playhead, startHandle, endHandle);
-
-        let fields = createDiv(null, 'minimax-h3-trim-fields');
-        let makeTimeField = (labelText, titleText) => {
-            let label = document.createElement('label');
-            label.className = 'minimax-h3-trim-label';
-            label.append(labelText);
-            let input = document.createElement('input');
-            input.type = 'number';
-            input.className = 'minimax-h3-trim-input';
-            input.min = '0';
-            input.step = '0.05';
-            input.title = titleText;
-            label.appendChild(input);
-            fields.appendChild(label);
-            return input;
-        };
-        let startInput = makeTimeField('Start', 'Trim start in seconds');
-        let endInput = makeTimeField('End', 'Trim end in seconds');
-        let makeToolButton = (text, titleText) => {
-            let button = document.createElement('button');
-            button.type = 'button';
-            button.className = 'basic-button minimax-h3-trim-tool';
-            button.textContent = text;
-            button.title = titleText;
-            fields.appendChild(button);
-            return button;
-        };
-        let setStart = makeToolButton('⇤ Start', 'Set the trim start to the current playback position');
-        let setEnd = makeToolButton('End ⇥', 'Set the trim end to the current playback position');
-        let previewButton = makeToolButton('▶ Preview', 'Play only the selected trim window');
-        let badge = document.createElement('span');
-        badge.className = 'minimax-h3-trim-length';
-        fields.appendChild(badge);
-
-        let actions = createDiv(null, 'minimax-h3-trim-actions');
-        let addButton = document.createElement('button');
-        addButton.type = 'button';
-        addButton.className = 'basic-button minimax-h3-trim-add';
-        addButton.textContent = '➕ Add Reference';
-        addButton.title = 'Add this file as a reference. Only the selected window is used at generation time.';
-        let cancelButton = document.createElement('button');
-        cancelButton.type = 'button';
-        cancelButton.className = 'basic-button minimax-h3-trim-cancel';
-        cancelButton.textContent = 'Cancel';
-        let note = document.createElement('span');
-        note.className = 'minimax-h3-trim-note';
-        note.textContent = 'Loading duration…';
-        actions.append(addButton, cancelButton, note);
-
-        panel.append(head, preview, track, fields, actions);
-        modal.appendChild(panel);
-        document.body.appendChild(modal);
-
-        let onEscape = (event) => {
-            if (event.key === 'Escape') {
-                event.preventDefault();
-                event.stopImmediatePropagation();
-                this.closeTrimPopup();
-            }
-        };
-        document.addEventListener('keydown', onEscape, true);
-        this.trimPopup = {
-            file, type, modal, element, url, track, fill, playhead, startHandle, endHandle,
-            startInput, endInput, badge, note, addButton,
-            duration: null, start: 0, end: null, previewActive: false, busy: false, onEscape,
-        };
-        // Keep prompt-box hotkeys and SwarmUI global key handlers out of the popup.
-        panel.addEventListener('keydown', (event) => {
-            if (event.key !== 'Escape') {
-                event.stopPropagation();
-            }
-        });
-        modal.addEventListener('mousedown', (event) => {
-            if (event.target === modal) {
-                this.closeTrimPopup();
-            }
-        });
-        close.addEventListener('click', () => this.closeTrimPopup());
-        cancelButton.addEventListener('click', () => this.closeTrimPopup());
-        addButton.addEventListener('click', () => this.confirmTrimAdd());
-
-        element.addEventListener('loadedmetadata', () => {
-            let popup = this.trimPopup;
-            if (popup?.element !== element) {
-                return;
-            }
-            let duration = Number(element.duration);
-            if (Number.isFinite(duration) && duration > 0) {
-                popup.duration = duration;
-                popup.start = 0;
-                popup.end = duration;
-                popup.note.textContent = '';
-                this.updateTrimPopupUI();
-            }
-            else {
-                popup.note.textContent = 'Duration unavailable — this file can only be added untrimmed.';
-            }
-        });
-        element.addEventListener('timeupdate', () => {
-            let popup = this.trimPopup;
-            if (popup?.element !== element || !popup.duration) {
-                return;
-            }
-            let position = Math.min(element.currentTime, popup.duration);
-            popup.playhead.style.left = `${(position / popup.duration) * 100}%`;
-            if (popup.previewActive && element.currentTime >= popup.end - 0.02) {
-                element.pause();
-                popup.previewActive = false;
-            }
-        });
-        element.addEventListener('pause', () => {
-            if (this.trimPopup) {
-                this.trimPopup.previewActive = false;
-            }
-        });
-        element.addEventListener('error', () => {
-            let popup = this.trimPopup;
-            if (popup?.element === element && !popup.duration) {
-                popup.note.textContent = 'Preview failed — the file can still be added untrimmed.';
-            }
-        });
-
-        this.bindTrimHandle(startHandle, true);
-        this.bindTrimHandle(endHandle, false);
-        track.addEventListener('pointerdown', (event) => {
-            let popup = this.trimPopup;
-            if (!popup?.duration || event.target === popup.startHandle || event.target === popup.endHandle) {
-                return;
-            }
-            event.preventDefault();
-            popup.element.currentTime = this.trimTimelineTime(event);
-        });
-        startInput.addEventListener('change', () => {
-            let popup = this.trimPopup;
-            if (popup?.duration) {
-                let value = parseFloat(popup.startInput.value);
-                this.setTrimRange(value, popup.end, value);
-            }
-        });
-        endInput.addEventListener('change', () => {
-            let popup = this.trimPopup;
-            if (popup?.duration) {
-                let value = parseFloat(popup.endInput.value);
-                this.setTrimRange(popup.start, value, value);
-            }
-        });
-        setStart.addEventListener('click', () => {
-            let popup = this.trimPopup;
-            if (popup?.duration) {
-                this.setTrimRange(popup.element.currentTime, popup.end);
-            }
-        });
-        setEnd.addEventListener('click', () => {
-            let popup = this.trimPopup;
-            if (popup?.duration) {
-                this.setTrimRange(popup.start, popup.element.currentTime);
-            }
-        });
-        previewButton.addEventListener('click', () => {
-            let popup = this.trimPopup;
-            if (!popup?.duration) {
-                return;
-            }
-            popup.element.currentTime = popup.start;
-            popup.previewActive = true;
-            popup.element.play().catch(() => {
-                popup.previewActive = false;
-            });
+        this.trimPopup = new SECoursesTrimPopup(file, {
+            type: type,
+            title: '✂ Trim Reference',
+            addLabel: '➕ Add Reference',
+            addTitle: 'Add this file as a reference. Only the selected window is used at generation time.',
+            onAdd: (popup) => this.confirmTrimAdd(popup),
+            onClose: (popup) => {
+                if (this.trimPopup === popup) {
+                    this.trimPopup = null;
+                }
+            },
         });
     }
 
@@ -1725,162 +1519,25 @@ class MiniMaxH3PromptReferences {
             return;
         }
         this.trimPopup = null;
-        document.removeEventListener('keydown', popup.onEscape, true);
-        popup.element.pause?.();
-        popup.modal.remove();
-        URL.revokeObjectURL(popup.url);
-    }
-
-    /** Timeline seconds for a pointer event over the trim track. */
-    trimTimelineTime(event) {
-        let rect = this.trimPopup.track.getBoundingClientRect();
-        let ratio = rect.width ? (event.clientX - rect.left) / rect.width : 0;
-        return Math.max(0, Math.min(1, ratio)) * (this.trimPopup.duration ?? 0);
-    }
-
-    bindTrimHandle(handle, isStart) {
-        handle.addEventListener('pointerdown', (event) => {
-            let popup = this.trimPopup;
-            if (!popup?.duration) {
-                return;
-            }
-            event.preventDefault();
-            event.stopPropagation();
-            try {
-                handle.setPointerCapture(event.pointerId);
-            }
-            catch (error) {
-                // Dragging still works without capture; it just stops at the panel edge.
-            }
-            let move = (moveEvent) => {
-                let time = this.trimTimelineTime(moveEvent);
-                if (isStart) {
-                    this.setTrimRange(Math.min(time, popup.end - this.trimMinRange()), popup.end, time);
-                }
-                else {
-                    this.setTrimRange(popup.start, Math.max(time, popup.start + this.trimMinRange()), time);
-                }
-            };
-            let stop = () => {
-                handle.removeEventListener('pointermove', move);
-                handle.removeEventListener('pointerup', stop);
-                handle.removeEventListener('pointercancel', stop);
-            };
-            handle.addEventListener('pointermove', move);
-            handle.addEventListener('pointerup', stop);
-            handle.addEventListener('pointercancel', stop);
-            move(event);
-        });
-    }
-
-    setTrimRange(start, end, seek = null) {
-        let popup = this.trimPopup;
-        if (!popup?.duration) {
-            return;
-        }
-        let minRange = Math.min(this.trimMinRange(), popup.duration);
-        start = Math.max(0, Math.min(Number.isFinite(start) ? start : 0, popup.duration));
-        end = Math.max(0, Math.min(Number.isFinite(end) ? end : popup.duration, popup.duration));
-        if (end - start < minRange) {
-            end = Math.min(popup.duration, start + minRange);
-            start = Math.max(0, Math.min(start, end - minRange));
-        }
-        popup.start = start;
-        popup.end = end;
-        if (seek != null && Number.isFinite(seek)) {
-            popup.element.currentTime = Math.max(0, Math.min(seek, popup.duration));
-        }
-        this.updateTrimPopupUI();
-    }
-
-    updateTrimPopupUI() {
-        let popup = this.trimPopup;
-        if (!popup?.duration) {
-            return;
-        }
-        let startPct = (popup.start / popup.duration) * 100;
-        let endPct = (popup.end / popup.duration) * 100;
-        popup.startHandle.style.left = `${startPct}%`;
-        popup.endHandle.style.left = `${endPct}%`;
-        popup.fill.style.left = `${startPct}%`;
-        popup.fill.style.width = `${Math.max(0, endPct - startPct)}%`;
-        if (document.activeElement !== popup.startInput) {
-            popup.startInput.value = popup.start.toFixed(2);
-        }
-        if (document.activeElement !== popup.endInput) {
-            popup.endInput.value = popup.end.toFixed(2);
-        }
-        let trimmed = this.trimPopupIsTrimmed();
-        popup.badge.textContent = trimmed
-            ? `✂ ${(popup.end - popup.start).toFixed(2)}s of ${popup.duration.toFixed(2)}s`
-            : `full ${popup.duration.toFixed(2)}s (untrimmed)`;
-        popup.badge.classList.toggle('minimax-h3-trim-length-active', trimmed);
-    }
-
-    /** Renders the selected slice of an audio file to a 16-bit PCM WAV file, fully client-side. */
-    async trimAudioToWav(file, start, end, newName) {
-        let context = new AudioContext();
-        let buffer;
-        try {
-            buffer = await context.decodeAudioData(await file.arrayBuffer());
-        }
-        finally {
-            context.close();
-        }
-        let rate = buffer.sampleRate;
-        let first = Math.max(0, Math.floor(start * rate));
-        let last = Math.min(buffer.length, Math.max(first + 1, Math.round(end * rate)));
-        let frames = last - first;
-        let channels = Math.min(2, buffer.numberOfChannels);
-        let bytesPerFrame = channels * 2;
-        let dataSize = frames * bytesPerFrame;
-        let wav = new DataView(new ArrayBuffer(44 + dataSize));
-        let writeText = (offset, text) => [...text].forEach((c, i) => wav.setUint8(offset + i, c.charCodeAt(0)));
-        writeText(0, 'RIFF');
-        wav.setUint32(4, 36 + dataSize, true);
-        writeText(8, 'WAVEfmt ');
-        wav.setUint32(16, 16, true);
-        wav.setUint16(20, 1, true);
-        wav.setUint16(22, channels, true);
-        wav.setUint32(24, rate, true);
-        wav.setUint32(28, rate * bytesPerFrame, true);
-        wav.setUint16(32, bytesPerFrame, true);
-        wav.setUint16(34, 16, true);
-        writeText(36, 'data');
-        wav.setUint32(40, dataSize, true);
-        let offset = 44;
-        let channelData = [];
-        for (let c = 0; c < channels; c++) {
-            channelData.push(buffer.getChannelData(c));
-        }
-        for (let i = first; i < last; i++) {
-            for (let c = 0; c < channels; c++) {
-                let sample = Math.max(-1, Math.min(1, channelData[c][i]));
-                wav.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
-                offset += 2;
-            }
-        }
-        return new File([wav.buffer], newName, { type: 'audio/wav' });
+        popup.close();
     }
 
     /** Adds the popup's file as a reference: audio is sliced to a WAV right here in the
      * browser, video keeps its full data and carries the window to the backend's exact
      * Video Slice trim (so there is no client-side re-encode of video). */
-    async confirmTrimAdd() {
-        let popup = this.trimPopup;
+    async confirmTrimAdd(popup) {
         if (!popup || popup.busy) {
             return;
         }
-        popup.busy = true;
-        popup.addButton.disabled = true;
+        popup.setBusy(true);
         try {
-            if (!this.trimPopupIsTrimmed()) {
+            if (!popup.trimmed()) {
                 await this.addFiles([popup.file]);
             }
             else if (popup.type === 'audio') {
-                popup.note.textContent = 'Rendering trimmed audio…';
+                popup.setNote('Rendering trimmed audio…');
                 let base = popup.file.name.replace(/\.[^.]+$/, '');
-                let wav = await this.trimAudioToWav(popup.file, popup.start, popup.end,
+                let wav = await SECoursesTrimPopup.sliceAudioToWav(popup.file, popup.start, popup.end,
                     `${base} [${popup.start.toFixed(2)}s-${popup.end.toFixed(2)}s].wav`);
                 await this.addFiles([wav]);
             }
@@ -1901,9 +1558,8 @@ class MiniMaxH3PromptReferences {
             this.closeTrimPopup();
         }
         catch (error) {
-            popup.busy = false;
-            popup.addButton.disabled = false;
-            popup.note.textContent = `Failed: ${error?.message || error}`;
+            popup.setBusy(false);
+            popup.setNote(`Failed: ${error?.message || error}`);
         }
     }
 }
