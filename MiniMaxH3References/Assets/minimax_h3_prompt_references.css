@@ -195,13 +195,37 @@ audio.minimax-h3-prompt-reference-preview {
     width: 12rem;
 }
 
+.minimax-h3-prompt-reference-label-row {
+    align-items: center;
+    display: flex;
+    gap: 0.4rem;
+    margin-top: 0.25rem;
+}
+
 .minimax-h3-prompt-reference-label {
     color: var(--minimax-ref-color, var(--text));
     font-family: monospace;
     font-size: 0.78rem;
     font-weight: 600;
     line-height: 1.2;
-    margin-top: 0.25rem;
+}
+
+.minimax-h3-prompt-reference-trim-button {
+    background: color-mix(in srgb, #1db98a 12%, transparent);
+    border: 1px solid color-mix(in srgb, #1db98a 55%, transparent);
+    border-radius: 4px;
+    color: #1db98a;
+    cursor: pointer;
+    font-size: 0.66rem;
+    font-weight: 600;
+    line-height: 1.3;
+    margin-left: auto;
+    padding: 0 0.35rem;
+    white-space: nowrap;
+}
+
+.minimax-h3-prompt-reference-trim-button:hover {
+    background: color-mix(in srgb, #1db98a 30%, transparent);
 }
 
 .minimax-h3-prompt-reference-name {

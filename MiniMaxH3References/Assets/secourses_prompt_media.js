@@ -87,20 +87,27 @@ function secoursesDisplayFilename(filename) {
 
 // ==================== Shared trim popup (used by the generic uploader and the MiniMax H3 uploader) ====================
 
-/** Single-file trim popup for one video or audio file: preview, draggable start/end handles, exact second fields,
+/** Single-file trim popup for one video or audio: preview, draggable start/end handles, exact second fields,
  * click-to-seek, set-start/set-end at the playhead and a window-only preview. It is UI only: the `onAdd(popup)`
- * callback decides what to do with `popup.file`, `popup.start`, `popup.end` and `popup.trimmed()`. Options:
- * type, title, addLabel, addTitle, minRange (seconds), onAdd(popup), onClose(popup). */
+ * callback decides what to do with `popup.file`, `popup.start`, `popup.end` and `popup.trimmed()`.
+ * `source` is a File / Blob (a freshly picked file) or `{ name, url }` for media that is already attached (a data
+ * URL, blob URL or server URL). Options: type, name, title, addLabel, addTitle, minRange (seconds), start and end
+ * (an existing window to preselect), onAdd(popup), onClose(popup). */
 class SECoursesTrimPopup {
-    constructor(file, options = {}) {
+    constructor(source, options = {}) {
         if (SECoursesTrimPopup.active) {
             SECoursesTrimPopup.active.close();
         }
         SECoursesTrimPopup.active = this;
-        this.file = file;
-        this.type = options.type || secoursesMediaTypeOf(file) || 'audio';
+        this.file = source;
+        this.isBlob = typeof Blob !== 'undefined' && source instanceof Blob;
+        this.name = options.name || source?.name || 'media';
+        this.sourceUrl = this.isBlob ? URL.createObjectURL(source) : (source?.url || source?.src || `${source}`);
+        this.type = options.type || (this.isBlob ? secoursesMediaTypeOf(source) : null) || 'audio';
         this.onAdd = options.onAdd || null;
         this.onClose = options.onClose || null;
+        this.initialStart = Number.isFinite(options.start) ? options.start : null;
+        this.initialEnd = Number.isFinite(options.end) ? options.end : null;
         // Reference videos need a few frames at 24 FPS; audio can be cut much finer.
         this.minRange = options.minRange ?? (this.type === 'video' ? 0.25 : 0.05);
         this.duration = null;
@@ -129,8 +136,8 @@ class SECoursesTrimPopup {
         let title = createSpan(null, 'secourses-trim-title');
         title.textContent = options.title || (type === 'video' ? '✂ Trim Video' : '✂ Trim Audio');
         let name = createSpan(null, 'secourses-trim-filename');
-        name.textContent = this.file.name;
-        name.title = this.file.name;
+        name.textContent = this.name;
+        name.title = this.name;
         let close = document.createElement('button');
         close.type = 'button';
         close.className = 'secourses-trim-close';
@@ -146,8 +153,7 @@ class SECoursesTrimPopup {
         if (type === 'video') {
             this.element.playsInline = true;
         }
-        this.url = URL.createObjectURL(this.file);
-        this.element.src = this.url;
+        this.element.src = this.sourceUrl;
         preview.appendChild(this.element);
 
         this.track = createDiv(null, 'secourses-trim-track');
@@ -245,7 +251,12 @@ class SECoursesTrimPopup {
                 this.start = 0;
                 this.end = duration;
                 this.note.textContent = '';
-                this.updateUI();
+                if (this.initialStart !== null || this.initialEnd !== null) {
+                    this.setRange(this.initialStart ?? 0, this.initialEnd ?? duration, this.initialStart ?? null);
+                }
+                else {
+                    this.updateUI();
+                }
             }
             else {
                 this.note.textContent = 'Duration unavailable — this file can only be added untrimmed.';
@@ -336,7 +347,9 @@ class SECoursesTrimPopup {
         document.removeEventListener('keydown', this.onEscape, true);
         this.element.pause?.();
         this.modal.remove();
-        URL.revokeObjectURL(this.url);
+        if (this.isBlob) {
+            URL.revokeObjectURL(this.sourceUrl);
+        }
         if (this.onClose) {
             this.onClose(this);
         }
@@ -425,12 +438,20 @@ class SECoursesTrimPopup {
         this.badge.classList.toggle('secourses-trim-length-active', trimmed);
     }
 
-    /** Renders the selected slice of an audio file to a 16-bit PCM WAV File, fully client-side and sample-accurate. */
-    static async sliceAudioToWav(file, start, end, newName) {
+    /** Renders the selected slice of an audio source (a File / Blob, or `{ url }` / a URL string of already attached
+     * audio) to a 16-bit PCM WAV File, fully client-side and sample-accurate. */
+    static async sliceAudioToWav(source, start, end, newName) {
+        let bytes;
+        if (typeof Blob !== 'undefined' && source instanceof Blob) {
+            bytes = await source.arrayBuffer();
+        }
+        else {
+            bytes = await (await fetch(source?.url || source?.src || `${source}`)).arrayBuffer();
+        }
         let context = new AudioContext();
         let buffer;
         try {
-            buffer = await context.decodeAudioData(await file.arrayBuffer());
+            buffer = await context.decodeAudioData(bytes);
         }
         finally {
             context.close().catch(() => {});
@@ -1010,9 +1031,20 @@ class SECoursesPromptMedia {
         role.style.display = 'none';
         let meta = createSpan(null, 'secourses-media-meta');
         badgeRow.append(badge, role, meta);
+        let nameRow = createDiv(null, 'secourses-media-name-row');
         let name = createSpan(null, 'secourses-media-name');
-        footer.append(badgeRow, name);
-        state = { media: media, type: type, footer: footer, badge: badge, role: role, meta: meta, name: name, player: null, muteButton: null, handlers: [] };
+        let trim = createSpan(null, 'secourses-media-trim');
+        trim.style.display = 'none';
+        nameRow.append(name, trim);
+        footer.append(badgeRow, nameRow);
+        // A replacement that did not come from this module's own trim (eg a file dropped onto the card) is a new file.
+        if (card.dataset.secoursesTrimPending) {
+            delete card.dataset.secoursesTrimPending;
+        }
+        else {
+            delete card.dataset.secoursesTrim;
+        }
+        state = { media: media, type: type, footer: footer, badge: badge, role: role, meta: meta, name: name, trim: trim, player: null, muteButton: null, trimButton: null, handlers: [] };
         if (type === 'audio') {
             state.player = new SECoursesAudioPlayer(media, color);
             media.after(state.player.element);
@@ -1046,6 +1078,19 @@ class SECoursesPromptMedia {
                 state.cardHandlers = [['mouseenter', onEnter], ['mouseleave', onLeave]];
             }
         }
+        if (type !== 'image') {
+            let trimButton = document.createElement('button');
+            trimButton.type = 'button';
+            trimButton.className = 'secourses-media-trim-button';
+            trimButton.textContent = '✂';
+            trimButton.title = `Trim this ${type}: keep only an exact start/end window of it`;
+            trimButton.addEventListener('click', (event) => {
+                event.stopPropagation();
+                this.openCardTrim(card);
+            });
+            card.appendChild(trimButton);
+            state.trimButton = trimButton;
+        }
         media.draggable = false;
         this.bindCardDrag(card);
         this.cardState.set(card, state);
@@ -1070,6 +1115,7 @@ class SECoursesPromptMedia {
         }
         state.player?.destroy();
         state.footer.remove();
+        state.trimButton?.remove();
         for (let [name, handler] of state.handlers) {
             state.media.removeEventListener(name, handler);
         }
@@ -1144,6 +1190,13 @@ class SECoursesPromptMedia {
         let filename = secoursesDisplayFilename(rawFilename);
         setText(state.name, filename || (media.dataset.filedata?.startsWith('data:') ? 'pasted / dropped file' : ''));
         state.name.title = rawFilename;
+        let trimText = card.dataset.secoursesTrim || '';
+        setText(state.trim, trimText);
+        state.trim.title = trimText ? 'This attachment is the trimmed window of the original file.' : '';
+        let trimDisplay = trimText ? '' : 'none';
+        if (state.trim.style.display !== trimDisplay) {
+            state.trim.style.display = trimDisplay;
+        }
         let title = media.title || `${info.label} ${index}${filename ? `: ${filename}` : ''}`;
         if (card.title !== title) {
             card.title = title;
@@ -1274,6 +1327,84 @@ class SECoursesPromptMedia {
                 }, 0, (error) => reject(new Error(`${error}`)));
             });
             popup.close();
+        }
+        catch (error) {
+            popup.setBusy(false);
+            popup.setNote(`Failed: ${error?.message || error}`);
+        }
+    }
+
+    // ==================== Trimming an attached card in place ====================
+
+    /** Opens the trim popup for an attached video or audio card; the result replaces the card's media in place. */
+    openCardTrim(card) {
+        let state = this.cardState.get(card);
+        if (!state || state.type === 'image') {
+            return;
+        }
+        let media = state.media;
+        let name = secoursesDisplayFilename(card.dataset.filename || media.dataset.filename) || `${state.type} attachment`;
+        new SECoursesTrimPopup({ name: name, url: media.currentSrc || media.src }, {
+            type: state.type,
+            title: state.type === 'video' ? '✂ Trim Video Attachment' : '✂ Trim Audio Attachment',
+            addLabel: '✂ Apply Trim',
+            addTitle: 'Replace this attachment with the selected window (the card keeps its position).',
+            onAdd: (popup) => this.confirmCardTrim(popup, card),
+        });
+    }
+
+    /** Replaces the card's media with the trimmed window: audio is re-sliced to a WAV in the browser, video is trimmed on
+     * the server (EditVideo into inputs/edited_video). The core's replace-in-place path keeps the card's order. */
+    async confirmCardTrim(popup, card) {
+        popup.setBusy(true);
+        try {
+            let state = this.cardState.get(card);
+            if (!state || !card.isConnected) {
+                throw new Error('this attachment was removed');
+            }
+            if (!popup.trimmed()) {
+                popup.close();
+                return;
+            }
+            let media = state.media;
+            let baseName = secoursesDisplayFilename(card.dataset.filename || media.dataset.filename || '') || state.type;
+            let windowText = `${popup.start.toFixed(2)}s-${popup.end.toFixed(2)}s`;
+            card.dataset.secoursesTrimPending = 'true';
+            try {
+                if (state.type === 'audio') {
+                    popup.setNote('Rendering trimmed audio…');
+                    let base = baseName.replace(/\.[^.]+$/, '').replace(/ \[[0-9.]+s-[0-9.]+s\]$/, '');
+                    let wav = await SECoursesTrimPopup.sliceAudioToWav({ url: media.currentSrc || media.src }, popup.start, popup.end, `${base} [${windowText}].wav`);
+                    let data = await secoursesReadFileAsDataUrl(wav);
+                    imagePromptAddImageData(data, 'audio', data, wav.name, card);
+                }
+                else {
+                    popup.setNote('Trimming the video on the server…');
+                    let endMilliseconds = Math.abs(popup.end - popup.duration) < 0.001 ? -1 : Math.round(popup.end * 1000);
+                    let request = {
+                        video: media.dataset.filedata,
+                        filename: baseName,
+                        startMilliseconds: Math.round(popup.start * 1000),
+                        endMilliseconds: endMilliseconds,
+                    };
+                    await new Promise((resolve, reject) => {
+                        genericRequest('EditVideo', request, (result) => {
+                            imagePromptAddImageData(`${getImageOutPrefix()}/${result.result}`, 'video', result.result, result.result, card);
+                            if (typeof inputBrowserHelper !== 'undefined' && inputBrowserHelper.inputImageBrowser) {
+                                inputBrowserHelper.inputImageBrowser.lightRefresh();
+                            }
+                            resolve();
+                        }, 0, (error) => reject(new Error(`${error}`)));
+                    });
+                }
+            }
+            catch (error) {
+                delete card.dataset.secoursesTrimPending;
+                throw error;
+            }
+            card.dataset.secoursesTrim = `✂ ${popup.start.toFixed(2)}s – ${popup.end.toFixed(2)}s`;
+            popup.close();
+            this.scheduleSync();
         }
         catch (error) {
             popup.setBusy(false);

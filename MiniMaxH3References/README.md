@@ -20,14 +20,20 @@ script):
   elapsed / total time), video a preview with hover controls and a mute toggle, images a fixed frame; every card
   shows its type and number (`Audio 1`), duration / resolution and filename, with the core's ☰ menu (Split
   Audio, Advanced Video Editor, Remove) and × on hover.
+- ✂ on an attached video or audio card (since 1.16.0) trims that card in place: the same popup opens on the
+  attached media, audio is re-sliced in the browser, video is re-trimmed on the server, and the card keeps its
+  position with a `✂ start – end` note.
 - Drag cards left/right to reorder attachments of the same type; the card order is the order SwarmUI sends.
 - Paste video and audio files into the prompt box (the core only pasted images); drag and drop keeps working,
   with a clearer drop highlight.
 - LTX 2.5 Audio To Video: while that parameter is on, the first audio card is marked **source audio** and the
   toolbar says which attachment the video follows, or warns when no audio is attached yet.
 
-The MiniMax H3 reference uploader described below is unchanged and takes over while a MiniMax H3 model is
-selected; both uploaders share the trim popup (`SECoursesTrimPopup`).
+The MiniMax H3 reference uploader described below takes over while a MiniMax H3 model is selected; both
+uploaders share the trim popup (`SECoursesTrimPopup`), and since 1.16.0 every MiniMax H3 video or audio
+reference card has its own **✂ Trim** button: a video keeps its full data and only the backend trim window
+changes (the popup preselects the current window; select the full range to clear it), an audio reference is
+sliced again in the browser.
 
 ## Video and Audio Shift (Advanced Sampling)
 

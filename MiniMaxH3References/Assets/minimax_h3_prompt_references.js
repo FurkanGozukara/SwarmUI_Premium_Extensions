@@ -916,13 +916,27 @@ class MiniMaxH3PromptReferences {
             media.muted = true;
         }
 
+        let labelRow = document.createElement('div');
+        labelRow.className = 'minimax-h3-prompt-reference-label-row';
         let label = document.createElement('span');
         label.className = 'minimax-h3-prompt-reference-label';
+        let trimButton = document.createElement('button');
+        trimButton.type = 'button';
+        trimButton.className = 'minimax-h3-prompt-reference-trim-button';
+        trimButton.textContent = '✂ Trim';
+        trimButton.title = type === 'video'
+            ? 'Set or change the start/end window of this video reference (applied exactly on the backend, nothing is re-encoded)'
+            : 'Cut this audio reference to an exact start/end window (sliced in the browser)';
+        trimButton.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.openReferenceTrim(container);
+        });
+        labelRow.append(label, trimButton);
         let name = document.createElement('span');
         name.className = 'minimax-h3-prompt-reference-name';
         name.textContent = filename;
         name.title = filename;
-        container.append(remove, media, label, name);
+        container.append(remove, media, labelRow, name);
         this.referenceArea.appendChild(container);
         this.showReferenceArea();
         return container;
@@ -1546,15 +1560,106 @@ class MiniMaxH3PromptReferences {
                 let data = await this.readFile(popup.file);
                 let container = this.addMedia(data, popup.file.name, 'video', URL.createObjectURL(popup.file),
                     minimaxH3StorageFilename(popup.file.name));
-                container.dataset.trimStart = `${Math.round(popup.start * 1000) / 1000}`;
-                container.dataset.trimEnd = `${Math.round(popup.end * 1000) / 1000}`;
-                let badge = document.createElement('span');
-                badge.className = 'minimax-h3-prompt-reference-trim-badge';
-                badge.textContent = `✂ ${popup.start.toFixed(2)}s – ${popup.end.toFixed(2)}s`;
-                badge.title = 'Only this window of the video is used at generation time.';
-                container.insertBefore(badge, container.querySelector('.minimax-h3-prompt-reference-name'));
+                this.setReferenceTrimWindow(container, popup.start, popup.end);
                 this.syncAll();
             }
+            this.closeTrimPopup();
+        }
+        catch (error) {
+            popup.setBusy(false);
+            popup.setNote(`Failed: ${error?.message || error}`);
+        }
+    }
+
+    /** Records (or clears, with nulls) the backend trim window of a video reference card and its badge. */
+    setReferenceTrimWindow(container, start, end) {
+        let badge = container.querySelector('.minimax-h3-prompt-reference-trim-badge');
+        if (start === null || end === null) {
+            delete container.dataset.trimStart;
+            delete container.dataset.trimEnd;
+            badge?.remove();
+            return;
+        }
+        container.dataset.trimStart = `${Math.round(start * 1000) / 1000}`;
+        container.dataset.trimEnd = `${Math.round(end * 1000) / 1000}`;
+        if (!badge) {
+            badge = document.createElement('span');
+            badge.className = 'minimax-h3-prompt-reference-trim-badge';
+            badge.title = 'Only this window of the video is used at generation time. Click ✂ Trim to change it.';
+            container.insertBefore(badge, container.querySelector('.minimax-h3-prompt-reference-name'));
+        }
+        badge.textContent = `✂ ${start.toFixed(2)}s – ${end.toFixed(2)}s`;
+    }
+
+    /** Opens the trim popup for an existing video or audio reference card. A video keeps its full data and only the
+     * backend window changes (the popup preselects the current one); audio is sliced again in the browser. */
+    openReferenceTrim(container) {
+        let type = container.dataset.referenceType;
+        if (type !== 'video' && type !== 'audio') {
+            return;
+        }
+        let media = container.querySelector('.minimax-h3-prompt-reference-preview');
+        let source = { name: container.dataset.filename || `${type} reference`, url: media?.currentSrc || media?.src || container.dataset.filedata };
+        this.closeTrimPopup();
+        this.trimPopup = new SECoursesTrimPopup(source, {
+            type: type,
+            title: type === 'video' ? '✂ Trim Video Reference' : '✂ Trim Audio Reference',
+            addLabel: '✂ Apply Trim',
+            addTitle: type === 'video'
+                ? 'Use only the selected window of this video at generation time (select the full range to clear the trim).'
+                : 'Replace this audio reference with the selected window.',
+            start: type === 'video' && container.dataset.trimStart ? Number(container.dataset.trimStart) : undefined,
+            end: type === 'video' && container.dataset.trimEnd ? Number(container.dataset.trimEnd) : undefined,
+            onAdd: (popup) => this.confirmReferenceTrim(popup, container),
+            onClose: (popup) => {
+                if (this.trimPopup === popup) {
+                    this.trimPopup = null;
+                }
+            },
+        });
+    }
+
+    async confirmReferenceTrim(popup, container) {
+        if (!popup || popup.busy) {
+            return;
+        }
+        popup.setBusy(true);
+        try {
+            if (!container.isConnected) {
+                throw new Error('this reference was removed');
+            }
+            if (popup.type === 'video') {
+                if (popup.trimmed()) {
+                    this.setReferenceTrimWindow(container, popup.start, popup.end);
+                }
+                else {
+                    this.setReferenceTrimWindow(container, null, null);
+                }
+            }
+            else if (popup.trimmed()) {
+                popup.setNote('Rendering trimmed audio…');
+                let base = (container.dataset.filename || 'audio').replace(/\.[^.]+$/, '').replace(/ \[[0-9.]+s-[0-9.]+s\]$/, '');
+                let wav = await SECoursesTrimPopup.sliceAudioToWav({ url: popup.sourceUrl }, popup.start, popup.end,
+                    `${base} [${popup.start.toFixed(2)}s-${popup.end.toFixed(2)}s].wav`);
+                let data = await this.readFile(wav);
+                let media = container.querySelector('.minimax-h3-prompt-reference-preview');
+                if (media) {
+                    let previous = media.src;
+                    media.src = URL.createObjectURL(wav);
+                    if (previous && previous.startsWith('blob:')) {
+                        URL.revokeObjectURL(previous);
+                    }
+                }
+                container.dataset.filedata = data;
+                container.dataset.filename = wav.name;
+                container.dataset.storageFilename = minimaxH3StorageFilename(wav.name);
+                let name = container.querySelector('.minimax-h3-prompt-reference-name');
+                if (name) {
+                    name.textContent = wav.name;
+                    name.title = wav.name;
+                }
+            }
+            this.syncAll();
             this.closeTrimPopup();
         }
         catch (error) {

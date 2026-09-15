@@ -177,7 +177,8 @@
 }
 
 .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button,
-.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button {
+.secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button,
+.secourses-prompt-media-active .secourses-media-card .secourses-media-trim-button {
     align-items: center;
     background: rgba(0, 0, 0, 0.6);
     border: 1px solid rgba(255, 255, 255, 0.3);
@@ -207,9 +208,21 @@
     right: 0.5rem;
 }
 
+.secourses-prompt-media-active .secourses-media-card .secourses-media-trim-button {
+    font-size: 0.8rem;
+    right: 3.8rem;
+    z-index: 4;
+}
+
 .secourses-prompt-media-active .secourses-media-card:hover .alt-prompt-image-container-menu-button,
-.secourses-prompt-media-active .secourses-media-card:hover .alt-prompt-image-container-remove-button {
+.secourses-prompt-media-active .secourses-media-card:hover .alt-prompt-image-container-remove-button,
+.secourses-prompt-media-active .secourses-media-card:hover .secourses-media-trim-button {
     opacity: 0.95;
+}
+
+.secourses-prompt-media-active .secourses-media-card .secourses-media-trim-button:hover {
+    background: color-mix(in srgb, #1db98a 70%, black);
+    border-color: #fff;
 }
 
 .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button:hover {
@@ -224,7 +237,8 @@
 
 @media (hover: none) {
     .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-menu-button,
-    .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button {
+    .secourses-prompt-media-active .secourses-media-card .alt-prompt-image-container-remove-button,
+    .secourses-prompt-media-active .secourses-media-card .secourses-media-trim-button {
         opacity: 0.9;
     }
 }
@@ -323,13 +337,32 @@
     opacity: 1;
 }
 
+.secourses-media-name-row {
+    align-items: center;
+    display: flex;
+    gap: 0.35rem;
+    min-width: 0;
+}
+
 .secourses-media-name {
     color: color-mix(in srgb, var(--text) 72%, var(--background));
     display: block;
+    flex: 1;
     font-size: 0.7rem;
     line-height: 1.2;
+    min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.secourses-media-trim {
+    color: #1db98a;
+    flex-shrink: 0;
+    font-family: monospace;
+    font-size: 0.66rem;
+    font-weight: 600;
+    line-height: 1.2;
     white-space: nowrap;
 }
 
