@@ -61,9 +61,9 @@ public class Ltxv2LatentUpscaleExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds LTXV2 latent upscaling, native LTX 2.3 Foley video-to-audio generation, and LTX 2.5 audio-to-video with an optional image (frozen source audio, identity anchors, auto resolution).";
+        Description = "Adds LTXV2 latent upscaling, native LTX 2.3 Foley video-to-audio generation, and LTX 2.5 audio-to-video with an optional image (frozen source audio, identity anchors, optional auto resolution).";
         License = "MIT";
-        Version = "0.9.0";
+        Version = "0.9.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -132,7 +132,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
     {
         T2IParamGroup group = new("LTX 2.5 Audio To Video", Open: true, OrderPriority: 8.5,
             Description: "Generate a video that follows a source audio file exactly (official LTX-2.5 two-stage distilled audio-to-video), with an optional first-frame image.");
-        A2VEnabled = T2IParamTypes.Register<bool>(new("LTX 2.5 Audio To Video", "The video follows the attached audio exactly: the source audio is encoded, frozen and kept in both stages, the video length is derived from the audio, and the untouched source waveform is muxed into the output.\nAttach the audio to the prompt (drag it onto the prompt box or use the attach button) or set Video Audio Input.\nLeave Init Image empty for audio + text to video. Put a still image in Init Image for image + audio to video: the first frame locks to the image, identity anchors keep the same face over long clips, and the final size is taken from the image aspect.\nRequires an LTX 2.5 model as the main Model. Official recipe: 8 distilled steps at half resolution, 2x latent spatial upscale, 3 refine steps, CFG 1. Sampler = stage 1, Refiner Sampler = stage 2.",
+        A2VEnabled = T2IParamTypes.Register<bool>(new("LTX 2.5 Audio To Video", "The video follows the attached audio exactly: the source audio is encoded, frozen and kept in both stages, the video length is derived from the audio, and the untouched source waveform is muxed into the output.\nAttach the audio to the prompt (drag it onto the prompt box or use the attach button) or set Video Audio Input.\nLeave Init Image empty for audio + text to video. Put a still image in Init Image for image + audio to video: the first frame locks to the image and identity anchors keep the same face over long clips.\nWidth/Height are the final video size as usual; set them to match your image's aspect ratio (or turn on 'LTX 2.5 A2V Auto Resolution From Image' to size the video from the image instead).\nRequires an LTX 2.5 model as the main Model. Official recipe: 8 distilled steps at half resolution, 2x latent spatial upscale, 3 refine steps, CFG 1. Sampler = stage 1, Refiner Sampler = stage 2.",
             "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: group, OrderPriority: -10, ChangeWeight: 8));
         A2VAudioStartSeconds = T2IParamTypes.Register<double>(new("LTX 2.5 A2V Audio Start Seconds", "Skip this many seconds from the start of the source audio.",
             "0", Min: 0, Max: 100000, Step: 0.01, ViewMax: 60, FeatureFlag: "comfyui", Group: group, OrderPriority: -9, DependNonDefault: A2VEnabled.Type.ID));
@@ -142,8 +142,8 @@ public class Ltxv2LatentUpscaleExtension : Extension
             "0", Min: 0, Max: 100000, Step: 0.5, ViewMax: 60, FeatureFlag: "comfyui", Group: group, OrderPriority: -8.8, DependNonDefault: A2VEnabled.Type.ID));
         A2VLeadInSilenceSeconds = T2IParamTypes.Register<double>(new("LTX 2.5 A2V Lead In Silence Seconds", "Silence prepended before the audio so the first frame (the input image) does not land mid-word. 0.25 to 0.4 s is typical for talking heads. The muxed audio gets the same lead-in, so sync is preserved.",
             "0.25", Min: 0, Max: 5, Step: 0.05, ViewMax: 2, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -8.7, DependNonDefault: A2VEnabled.Type.ID));
-        A2VAutoResolutionFromImage = T2IParamTypes.Register<bool>(new("LTX 2.5 A2V Auto Resolution From Image", "With an Init Image, take the final video size from its aspect ratio at the LTX-2.5 1080p pixel budget (16:9 = 1920x1080, 9:16 = 1080x1920, 1:1 = 1408x1408, 2:3 = 1152x1728, 4:3 = 1600x1216).\nTurn off to use Width/Height as the final size instead; the image is then center-cropped to that aspect. Without an Init Image, Width/Height are always the final size.",
-            "true", IgnoreIf: "true", FeatureFlag: "comfyui", Group: group, OrderPriority: -8, DependNonDefault: A2VEnabled.Type.ID));
+        A2VAutoResolutionFromImage = T2IParamTypes.Register<bool>(new("LTX 2.5 A2V Auto Resolution From Image", "Off (default): Width/Height are the final video size, the same as every other workflow. With an Init Image the image is center-cropped to that aspect.\nOn: with an Init Image the final size is taken from the image's aspect ratio at the LTX-2.5 1080p pixel budget (16:9 = 1920x1080, 9:16 = 1080x1920, 1:1 = 1408x1408, 2:3 = 1152x1728, 4:3 = 1600x1216) and Width/Height are ignored.\nWithout an Init Image, Width/Height are always the final size.",
+            "false", IgnoreIf: "false", FeatureFlag: "comfyui", Group: group, OrderPriority: -8, DependNonDefault: A2VEnabled.Type.ID));
         A2VImageStrengthStage1 = T2IParamTypes.Register<double>(new("LTX 2.5 A2V Base Image Strength", "How hard the first frame is locked to the Init Image in the half-resolution stage (official: 0.7).",
             "0.7", Min: 0, Max: 1, Step: 0.01, FeatureFlag: "comfyui", Group: group, ViewType: ParamViewType.SLIDER, OrderPriority: -7, IsAdvanced: true, DependNonDefault: A2VEnabled.Type.ID));
         A2VImageCompressionStage1 = T2IParamTypes.Register<int>(new("LTX 2.5 A2V Base Image Compression", "LTXV Preprocess compression applied to the Init Image before encoding in the half-resolution stage (official: 18). 0 = off.",
@@ -434,7 +434,7 @@ public class Ltxv2LatentUpscaleExtension : Extension
         double audioDuration = g.UserInput.Get(A2VAudioDurationSeconds, 0);
         double maxDuration = g.UserInput.Get(A2VMaxDurationSeconds, 0);
         double leadIn = g.UserInput.Get(A2VLeadInSilenceSeconds, 0.25);
-        bool autoResolution = g.UserInput.Get(A2VAutoResolutionFromImage, true);
+        bool autoResolution = g.UserInput.Get(A2VAutoResolutionFromImage, false);
         double imageStrength1 = g.UserInput.Get(A2VImageStrengthStage1, 0.7);
         int imageCompression1 = g.UserInput.Get(A2VImageCompressionStage1, 18);
         double imageStrength2 = g.UserInput.Get(A2VImageStrengthStage2, 1.0);

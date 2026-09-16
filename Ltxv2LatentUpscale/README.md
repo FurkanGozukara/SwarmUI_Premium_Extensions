@@ -32,7 +32,7 @@ What happens:
 | Step | Detail |
 | --- | --- |
 | Audio | Trimmed with `Audio Start Seconds` / `Audio Duration Seconds` (0 = whole file), optional `Max Duration Seconds` cap, `Lead In Silence Seconds` prepended (0.25 s default). The frame count is the smallest `8k+1` that covers the audio; the audio is padded with silence to the exact video length, encoded with the LTX audio VAE and frozen (noise mask 0) in both stages. |
-| Resolution | With an image and `Auto Resolution From Image` on: final size from the image aspect at the 1080p pixel budget (16:9 = 1920x1080, 9:16 = 1080x1920, 1:1 = 1408x1408, 2:3 = 1152x1728, 4:3 = 1600x1216). Otherwise Width/Height are the final size. Stage 1 runs at ceil(final / 2) on the 32 px grid, the 2x latent upscale doubles it, and the decoded frames are center-cropped to the exact final size. |
+| Resolution | Width/Height are the final size, like every other workflow; with an image the image is center-cropped to that aspect. Turn `Auto Resolution From Image` on (off by default) to take the final size from the image aspect at the 1080p pixel budget instead (16:9 = 1920x1080, 9:16 = 1080x1920, 1:1 = 1408x1408, 2:3 = 1152x1728, 4:3 = 1600x1216), ignoring Width/Height. Stage 1 runs at ceil(final / 2) on the 32 px grid, the 2x latent upscale doubles it, and the decoded frames are center-cropped to the exact final size. |
 | Image (optional) | Stage 1: `LTXVPreprocess` compression 18 + `LTXVImgToVideoInplace` strength 0.7. Stage 2: compression 0, strength 1.0. Both editable (advanced). |
 | Identity anchors (with image) | The image is re-injected as keyframe guides every `Anchor Every Seconds` (4 s) at `Anchor Strength` (0.4), only mid-clip, snapped to the quietest nearby moment (`Snap Anchors To Quiet`), mouth/jaw excluded (`Protect Mouth`; insightface when installed, else the bundled Haar cascade). `End Anchor = full` ends the clip on the input pose. |
 | Sampling | Stage 1: `Sampler` (euler_ancestral), `Base Sigmas` = official distilled 8-step schedule, CFG = `CFG Scale` (1). Stage 2 after the 2x latent upscale (`Refiner Upscale Method` latent model, default `ltx-2.5-latent-spatial-upscaler-x2-bf16-1.0.safetensors`): `Refiner Sampler` (euler), `Refine Sigmas` = official 3-step refinement. Same seed in both stages. |
@@ -40,7 +40,9 @@ What happens:
 | Torch compile | `LTX 2.5 A2V Torch Compile` (off): torch.compile the transformer for repeated runs with the same shapes. |
 
 `Steps`, `Refiner Steps`, `Refiner Control Percentage` and `Text2Video Frames` are ignored in this mode: the
-schedules are the sigma lists and the length comes from the audio.
+schedules are the sigma lists and the length comes from the audio. `Init Image Creativity` (and `Init Image
+Noise` / `Reset To Norm` / masks) are ignored too - this mode replaces the core sampler, so how hard the
+video sticks to the image is set by `Base Image Strength` (stage 1) and `Refine Image Strength` (stage 2).
 
 ### Bundled ComfyUI nodes
 
