@@ -19,6 +19,11 @@ off to retain original decoded frames. The backend needs the existing
 `insightface/models/buffalo_l/det_10g.onnx` files, plus the node pack's requirements.
 The extension and presets have no dependency on development scripts.
 
+The shared sampler's exact-output speed updates and simulated 8 GB memory test
+are documented in the [node performance report](https://github.com/FurkanGozukara/SECoursesAudioTools/blob/master/docs/avatarforever.md#exact-output-speed-follow-up-and-8-gb-budget-test-2026-09-20).
+Update SECoursesAudioTools and restart the ComfyUI backend to use them; existing
+preset values and this extension's graph remain compatible.
+
 All model selectors use existing local files; this extension never downloads
 models. The released four-step schedule controls sampling; Main Steps, CFG,
 negative prompt, refiner and unrelated video controls are not applied.
