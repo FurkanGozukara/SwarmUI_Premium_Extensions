@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Builtin_ComfyUIBackend;
@@ -22,7 +23,7 @@ public class QwenImage21Extension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Qwen Image 2.1 unified generation, reference editing, img2img, inpainting and RGBA.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.0.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/QwenImage21";
     }
 
@@ -47,14 +48,34 @@ public class QwenImage21Extension : Extension
         CacheDtype = Choice("Qwen Unified Cache Precision", "Default is lossless. Int8/int4 compress the reference cache and can change results.", "default", ["default", "int8", "int4"]);
         T2IParamInput.SpecialParameterHandlers.Add(input =>
         {
+            if (!input.Get(Enabled, false)) return;
+            // Applying another preset does not reset parameters absent from it.
+            if (!IsQwenImage21(input.Get(T2IParamTypes.Model)))
+            {
+                input.Remove(Enabled);
+                input.RequiredFlags.Remove("secourses_qwen_image21");
+                return;
+            }
             // Swarm's preliminary loader does not copy extension parameters.
             // This graph loads the selected model and its companions itself.
-            if (input.Get(Enabled, false)) input.Set(T2IParamTypes.NoLoadModels, true);
+            input.Set(T2IParamTypes.NoLoadModels, true);
         });
         WorkflowGenerator.AddStep(Generate, -16);
 
         T2IRegisteredParam<string> Choice(string name, string help, string value, string[] choices) =>
             T2IParamTypes.Register<string>(new(name, help, value, GetValues: _ => [.. choices], Group: group, DependNonDefault: Enabled.Type.ID));
+    }
+
+    private static bool IsQwenImage21(T2IModel model)
+    {
+        if (model?.ModelClass is not null)
+            return model.ModelClass.CompatClass?.ID == "qwen-image-2.1";
+        // Older metadata caches can leave new architectures unclassified.
+        // Use Swarm's native detector instead of guessing from the filename.
+        if (model is null || !System.IO.File.Exists(model.RawFilePath)
+            || Path.GetExtension(model.RawFilePath) is not (".safetensors" or ".sft")) return false;
+        return T2IModelClassSorter.ModelClasses["qwen-image-2.1"].IsThisModelOfClass(
+            model, T2IModel.GetMetadataHeaderFrom(model.RawFilePath));
     }
 
     private static void Generate(WorkflowGenerator g)

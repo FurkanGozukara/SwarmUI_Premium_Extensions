@@ -7,6 +7,11 @@ VAE and reference cache. Ordinary compatible LoRAs apply; old Qwen Turbo LoRAs
 are a different architecture. Generic refiner and other model-specific controls
 are not part of these workflows.
 
+The unified switch only activates for a Qwen Image 2.1 main model. Switching to
+an older model/preset keeps its normal workflow even if this switch remains
+checked. For models missing cached architecture metadata, the extension uses
+Swarm's native detector on the local checkpoint header.
+
 - **Generate / reference edit:** no images generates from text. Attach images to
   the prompt to edit/combine them. `@image1`, `@image2`, etc. follow attachment
   order; drag cards to reorder or remove them. The separate Init Image is `@init`.
@@ -58,6 +63,21 @@ alpha. Both API inpaint recipes also had zero unmasked RGBA error.
 Ten mixed RGB/RGBA references, init plus nine references, original-size
 non-square images, CPU/GPU/off cache, int8/int4 cache and CFG-3 negative prompts
 all executed successfully. Ten shared-node regression tests passed.
+
+Version 1.0.1 fixes a reproduced preset-switching regression: a leftover enabled
+Qwen switch could route FLUX through this workflow. Non-Qwen requests now remove
+the Qwen activation parameter and backend feature requirement before model
+loading and graph construction. The complete SECoursesAudioTools unit suite
+passed (29 tests, including AvatarForever and H3 streaming).
+`tests/check_preset_routing.py` compares existing preset graphs with the switch
+off versus left on; it reports presets that require unavailable models/media.
+On the isolated backend, 31 prior presets produced identical graphs with the
+switch off or left on. The other 33 could not be validated there because their
+baseline requests failed (missing models/nodes, custom samplers, or required
+inputs); the test report retains their exact errors. A live FLUX generation with
+the leftover switch succeeded, and Qwen 2.1 output stayed pixel-identical to its
+pre-fix result with the same prompt and seed. This does not claim that every
+older preset was executed end to end.
 
 Reproduction evidence on the development machine is in
 `temp/qwen21_swarm_validation` under the downloader workspace: scripts, source
