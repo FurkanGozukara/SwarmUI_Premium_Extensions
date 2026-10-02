@@ -35,6 +35,21 @@ reference card has its own **✂ Trim** button: a video keeps its full data and 
 changes (the popup preselects the current window; select the full range to clear it), an audio reference is
 sliced again in the browser.
 
+## Options under enable checkboxes are sent only while enabled (since 1.17.0)
+
+SwarmUI's `DependNonDefault` rule should hide an option, and leave it out of the generation request, while the
+checkbox it depends on is off. The core compares the checkbox value `false` with the default `"false"` using `==`,
+which never matches, so every SECourses option group (AvatarForever, Qwen Unified, SVI Pro, LTX 2.3 Foley, LTX 2.5
+Audio To Video, Licon MSR, MiniMax H3 References, Video Face Inpainting) was shown and sent with every generation.
+SwarmUI then wrote about 85 of these options into every image as `unused_parameters`, and listed and SHA-256 hashed
+the model files they name under `sui_models` (Gemma 3 12B, Qwen3-VL 8B, Wan 2.2 14B, ... in a Z-Image picture).
+
+`Assets/secourses_param_dependencies.js` (loaded first; it serves every SECourses extension) applies the rule with
+a text comparison for checkbox masters: those options stay hidden while their checkbox is off, and `getGenInput`
+drops them, so Generate, grids, batch tools and the Comfy workflow import send only what the workflow uses. Turning a
+feature on sends its options exactly as before. Other masters are compared exactly as the core does, so once the core
+compares checkboxes correctly the script removes nothing more. API clients still send whatever they send.
+
 ## Video and Audio Shift (Advanced Sampling)
 
 Since v1.14.0, **MiniMax H3 Video Shift** and **MiniMax H3 Audio Shift** are

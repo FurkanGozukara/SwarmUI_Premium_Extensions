@@ -1746,23 +1746,3 @@ if (typeof featureSetChangers != 'undefined') {
         }
     }, true);
 }
-
-/** Video Face Inpainting: keep the group's dependent parameters hidden until its enable checkbox is on
- * (core DependNonDefault compares the boolean value against the string default, so it never hides them). */
-if (typeof hideParamCallbacks != 'undefined') {
-    hideParamCallbacks.push(() => {
-        let master = document.getElementById('input_videofaceinpainting');
-        if (!master || master.checked) {
-            return;
-        }
-        for (let param of gen_param_types) {
-            if (param.depend_non_default == 'videofaceinpainting') {
-                let elem = document.getElementById(`input_${param.id}`);
-                let box = elem ? findParentOfClass(elem, 'auto-input') : null;
-                if (box) {
-                    box.style.display = 'none';
-                }
-            }
-        }
-    });
-}

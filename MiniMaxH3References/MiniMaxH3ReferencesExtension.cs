@@ -83,7 +83,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.16.0";
+        Version = "1.17.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -96,6 +96,9 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         _initialized = true;
 
+        // Shared for every SECourses extension: options under an enable checkbox stay hidden and unsent while it is off
+        // (the core's DependNonDefault check never matches a checkbox master).
+        ScriptFiles.Add("Assets/secourses_param_dependencies.js");
         // The shared MiniMax H3 token model (identical to FoleyExtension/web/js/minimax_h3_tokens.js) must load before the UI script.
         // Shared prompt media uploader for every model (toolbar, cards, waveform player, trim popup); the MiniMax H3 script reuses its trim popup, so it loads first.
         ScriptFiles.Add("Assets/secourses_prompt_media.js");
@@ -296,8 +299,9 @@ public class MiniMaxH3ReferencesExtension : Extension
         FaceSteps = Reg<int>("Face Inpaint Steps", "Sampling steps of the face pass. With denoise 0.55, 20 steps runs 11 of them.", "20", -8.4, 1, 100, 1, 50);
         FaceSampler = Reg<string>("Face Inpaint Sampler", "Sampler for the face pass. res_multistep matches the ComfyUI presets.", "res_multistep", -8.3, values: _ => ComfyUIBackendExtension.Samplers);
         FaceScheduler = Reg<string>("Face Inpaint Scheduler", "Scheduler for the face pass. simple matches the ComfyUI presets.", "simple", -8.2, values: _ => ComfyUIBackendExtension.Schedulers);
-        // The value list is never validated by the core: the UI sends this parameter even while Video Face Inpainting is off
-        // (the core's DependNonDefault cannot drop it for a boolean master), and a user without any YOLO model would otherwise
+        // The value list is never validated by the core: this parameter can arrive while Video Face Inpainting is off (the core's
+        // DependNonDefault never drops it for a checkbox master; secourses_param_dependencies.js drops it in the UI, but API calls
+        // and pages loaded before that script still send it), and a user without any YOLO model would otherwise
         // get "Invalid value for param Face Inpaint Detector - '' - must be one of: ``" on every generation. The face pass
         // resolves the real model itself (ResolveFaceDetector) only when it actually runs.
         FaceDetector = Reg<string>("Face Inpaint Detector", $"YOLO face model from the yolov8 models folder. {DefaultFaceDetector} is the tested default (place it in Models/yolov8). If the selected model is missing, another available face model is used automatically.", DefaultFaceDetector, -8.1, values: FaceDetectorChoices, validateValues: false);
