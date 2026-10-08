@@ -27,7 +27,7 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<string> ReferenceVideoTrims;
     private static List<T2IRegisteredParam<VideoFile>> ReferenceVideos = [];
     private static List<T2IRegisteredParam<AudioFile>> ReferenceAudios = [];
-    private static T2IRegisteredParam<bool> SpeedOptimize;
+    private static T2IRegisteredParam<bool> SpeedOptimize, SpeedFirstBlockCache;
     private static T2IRegisteredParam<double> SpeedCacheThreshold;
     private static T2IRegisteredParam<string> SpeedSparseAttention;
     private static T2IRegisteredParam<double> VideoSigmaShift;
@@ -42,7 +42,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<string> FaceSampler, FaceScheduler, FaceDetector, FaceCanvasMode, FaceFaces;
     // Init Audio group (an optional soundtrack the video must follow; MiniMax H3 today, other audio-video architectures later)
     private static T2IRegisteredParam<AudioFile> InitAudio;
-    private static T2IRegisteredParam<bool> InitAudioMatchDuration;
+    private static T2IRegisteredParam<bool> InitAudioMatchDuration, LongLipSync;
+    private static T2IRegisteredParam<string> LongWindow, LongOverlap;
+    public const string LongLipSyncFeatureId = "secourses_h3_long_lip_sync";
 
     /// <summary>Feature id advertised when the ComfyUI backend has the SECoursesMiniMaxH3InitAudio node (shipped by FurkanGozukara/FoleyExtension).</summary>
     public const string InitAudioFeatureId = "minimax_h3_init_audio";
@@ -55,6 +57,7 @@ public class MiniMaxH3ReferencesExtension : Extension
     {
         public string ConditioningNode;
         public string FramesNode;
+        public string LoadedAudio, LongOutput;
     }
 
     private static readonly ConditionalWeakTable<WorkflowGenerator, InitAudioState> InitAudioStates = new();
@@ -81,9 +84,9 @@ public class MiniMaxH3ReferencesExtension : Extension
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
-        Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, the NVlabs Sana sol-engine 4x speed optimizations, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
+        Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.17.0";
+        Version = "1.18.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -112,6 +115,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3LowVRAM"] = LowVramFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3FaceStitch"] = FaceInpaintFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesMiniMaxH3InitAudio"] = InitAudioFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["SEH3LongLipSync"] = LongLipSyncFeatureId;
         RegisterParameters();
         RegisterFaceInpaintParameters();
         RegisterInitAudioParameters();
@@ -142,6 +146,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(UseInitAudioAsOutputSoundtrack, 11.5);
         WorkflowGenerator.AddStep(ApplySamplingShiftOverrides, 99);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
+        WorkflowGenerator.AddStep(FinalizeLongLipSync, 200);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
     }
 
@@ -179,18 +184,25 @@ public class MiniMaxH3ReferencesExtension : Extension
     {
         SpeedOptimize = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 4x Speed",
-            "Enable the NVlabs Sana sol-engine MiniMax H3 speed optimizations: FirstBlockCache step skipping, Sol-Attn sparse attention, and batched VAE tile decoding.\nEach technique is verified on your GPU at runtime and anything that does not work or does not win there falls back to the normal path automatically, so this is safe to leave enabled on any GPU (RTX 30xx and newer).\nExpect roughly 2x-4x faster video generation with a small quality tradeoff from the cache and sparse attention.",
+            "Optional native ComfyUI SOL sparse attention, FirstBlockCache and batched VAE decoding. SOL and caching are approximate. Speed depends on resolution and settings; there is no universal 4x gain. Turn the master off for the standard model path.",
             "false", IgnoreIf: "false", FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupCore,
             OrderPriority: -17, ChangeWeight: 2));
+        // Keep saved preset/API IDs while retiring the unsupported speed claim.
+        SpeedOptimize = SpeedOptimize with { Type = SpeedOptimize.Type with { Name = "MiniMax H3 Optimizations" } };
+        T2IParamTypes.Types[SpeedOptimize.Type.ID] = SpeedOptimize.Type;
+        SpeedFirstBlockCache = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 First Block Cache", "Allow approximate block-stack reuse. Turn off to benchmark SOL alone.",
+            "true", FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling,
+            DependNonDefault: SpeedOptimize.Type.ID, OrderPriority: 16.4));
         SpeedCacheThreshold = T2IParamTypes.Register<double>(new(
             "MiniMax H3 Speed Cache Threshold",
-            "FirstBlockCache skip threshold for the MiniMax H3 4x Speed parameter.\n0.08 is the NVlabs sol-engine advertised near-lossless policy.\nHigher skips more aggressively (faster, lower quality), eg 0.15-0.20 for maximum speed.",
+            "FirstBlockCache skip threshold for the MiniMax H3 Optimizations parameter.\n0.08 is the conservative reference threshold; caching remains approximate.\nHigher skips more aggressively (faster, lower quality), eg 0.15-0.20 for maximum speed.",
             "0.08", Min: 0, Max: 1, Step: 0.01, ViewMax: 0.5, Toggleable: true,
             FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupCore, OrderPriority: -16.9,
             DependNonDefault: SpeedOptimize.Type.ID));
         SpeedSparseAttention = T2IParamTypes.Register<string>(new(
             "MiniMax H3 Speed Sparse Attention",
-            "Sol-Attn sparse attention mode for the MiniMax H3 4x Speed parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
+            "Native ComfyUI SOL sparse attention mode for the MiniMax H3 Optimizations parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
             "auto", GetValues: _ => ["auto", "enabled", "disabled"], IsAdvanced: true,
             FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 16.5));
         VideoSigmaShift = T2IParamTypes.Register<double>(new(
@@ -206,7 +218,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         // Sits at the bottom of the Core Parameters group (everything else there is negative).
         LowVram = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 Low VRAM",
-            "Reduce the peak VRAM of the MiniMax H3 transformer, so a resolution or duration that runs out of memory can still generate.\nYour video does not change. The big attention buffers are released at their last use and the feedforward runs in token chunks; rows are independent and the INT8 quantizer works per row, so the result is bit-for-bit identical, verified end-to-end.\nIt does not cost speed either: the smaller working set keeps more of each matmul in cache, which offsets the extra kernel launches.\nStacks with MiniMax H3 4x Speed. Leave it off if your generations already fit.",
+            "Reduce the peak VRAM of the MiniMax H3 transformer, so a resolution or duration that runs out of memory can still generate.\nYour video does not change. The big attention buffers are released at their last use and the feedforward runs in token chunks; rows are independent and the INT8 quantizer works per row, so the result is bit-for-bit identical, verified end-to-end.\nIt does not cost speed either: the smaller working set keeps more of each matmul in cache, which offsets the extra kernel launches.\nStacks with MiniMax H3 Optimizations. Leave it off if your generations already fit.",
             "false", IgnoreIf: "false", FeatureFlag: LowVramFeatureId, Group: T2IParamTypes.GroupCore,
             OrderPriority: 20, ChangeWeight: 2));
         LowVramMaxSaving = T2IParamTypes.Register<bool>(new(
@@ -393,6 +405,17 @@ public class MiniMaxH3ReferencesExtension : Extension
             "Init Audio Match Duration",
             "On (default): the video is as long as the init audio, rounded up to MiniMax H3's frame grid (17k+5 frames at 24 FPS); Text2Video Frames / Video Frames are ignored while an init audio is set.\nOff: keep your frame count; longer audio is cut and shorter audio is padded with silence.",
             "true", IgnoreIf: "true", FeatureFlag: InitAudioFeatureId, Group: group, OrderPriority: -9, DependNonDefault: InitAudio.Type.ID));
+        LongLipSync = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 Long Lip Sync", "Generate the whole Init Audio automatically in overlapping native H3 windows. Keeps clean latent overlap and the source soundtrack. Avoids repeated pixel re-encoding; does not guarantee indefinite identity or perfect lip sync. Uses Euler, simple schedule, CFG 1 and your selected Steps/LoRA. Export is H.264 at 24 FPS.",
+            "false", IgnoreIf: "false", FeatureFlag: LongLipSyncFeatureId, Group: group, OrderPriority: -8));
+        LongWindow = T2IParamTypes.Register<string>(new(
+            "H3 Long Window Frames", "Maximum sampling window. 243 is 10.125 seconds; smaller windows use less memory.",
+            "243", GetValues: _ => ["141", "192", "243", "294", "345"], Group: group,
+            FeatureFlag: LongLipSyncFeatureId, DependNonDefault: LongLipSync.Type.ID));
+        LongOverlap = T2IParamTypes.Register<string>(new(
+            "H3 Long Overlap Frames", "Held latent overlap: 39 is 1.625 seconds, 90 is 3.75 seconds with extra sampling work.",
+            "39", GetValues: _ => ["39", "90"], Group: group,
+            FeatureFlag: LongLipSyncFeatureId, DependNonDefault: LongLipSync.Type.ID));
     }
 
     private static bool IsMiniMaxH3Model(T2IModel model)
@@ -436,6 +459,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         (JArray positive, JArray latent) = ConditionOnInitAudio(g, audio, g.FinalPrompt, g.CurrentMedia.Path, fallbackFrames);
         g.FinalPrompt = positive;
         g.CurrentMedia = g.CurrentMedia.WithPath(latent);
+        AddLongLipSync(g, g.CurrentModel.Path, g.CurrentVae.Path, positive, latent, g.UserInput.Get(T2IParamTypes.Steps, 4), g.UserInput.Get(T2IParamTypes.Seed));
         if (InitAudioStates.TryGetValue(g, out InitAudioState state) && state.FramesNode is not null)
         {
             g.CurrentMedia.Frames = null; // the frame count is now decided by the audio on the backend
@@ -462,6 +486,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         (JArray positive, JArray latent) = ConditionOnInitAudio(g, audio, genInfo.PosCond, g.CurrentMedia.Path, fallbackFrames);
         genInfo.PosCond = positive;
         g.CurrentMedia = g.CurrentMedia.WithPath(latent);
+        AddLongLipSync(g, genInfo.Model.Path, genInfo.Vae.Path, positive, latent, genInfo.Steps, genInfo.Seed);
         if (InitAudioStates.TryGetValue(g, out InitAudioState state) && state.FramesNode is not null)
         {
             g.CurrentMedia.Frames = null;
@@ -478,6 +503,16 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         InitAudioState state = InitAudioStates.GetOrCreateValue(g);
         string loaded = g.CreateAudioLoadNode(audio, "${initaudio}");
+        state.LoadedAudio = loaded;
+        if (g.UserInput.Get(LongLipSync, false))
+        {
+            int window = int.Parse(g.UserInput.Get(LongWindow, "243"), CultureInfo.InvariantCulture);
+            foreach (string nodeClass in new[] { "EmptyMiniMaxH3LatentAV", "SwarmEmptyMiniMaxH3LatentAV", "MiniMaxH3ImageToVideo", "MiniMaxH3ReferenceToVideo" })
+            {
+                g.RunOnNodesOfClass(nodeClass, (_, node) => node["inputs"]["length"] = window);
+            }
+            return (positive, latent);
+        }
         bool matchDuration = g.UserInput.Get(InitAudioMatchDuration, true);
         if (matchDuration)
         {
@@ -511,6 +546,49 @@ public class MiniMaxH3ReferencesExtension : Extension
         });
         Logs.Info($"MiniMax H3 Init Audio attached ({(matchDuration ? "video length follows the audio" : $"{fallbackFrames} frames, audio cut or silence-padded")}, {InitAudioConditioning}).");
         return (WorkflowGenerator.NodePath(state.ConditioningNode, 0), WorkflowGenerator.NodePath(state.ConditioningNode, 1));
+    }
+
+    private static void AddLongLipSync(WorkflowGenerator g, JArray model, JArray videoVae, JArray positive, JArray latent, int steps, long seed)
+    {
+        if (!g.UserInput.Get(LongLipSync, false)) return;
+        if (!g.Features.Contains(LongLipSyncFeatureId))
+            throw new SwarmUserErrorException("Update SECoursesAudioTools and restart the backend for H3 Long Lip Sync.");
+        if (g.UserInput.Get(FaceInpaint, false))
+            throw new SwarmUserErrorException("H3 Long Lip Sync exports incrementally; disable the separate Video Face Inpainting pass for this mode.");
+        InitAudioState state = InitAudioStates.GetOrCreateValue(g);
+        state.LongOutput = g.CreateNode("SEH3LongLipSync", new JObject()
+        {
+            ["model"] = model, ["positive"] = positive, ["latent"] = latent,
+            ["audio"] = WorkflowGenerator.NodePath(state.LoadedAudio, 0),
+            ["audio_vae"] = g.CurrentAudioVae.Path, ["video_vae"] = videoVae,
+            ["seed"] = seed, ["steps"] = steps,
+            ["window_frames"] = g.UserInput.Get(LongWindow, "243"),
+            ["overlap_frames"] = g.UserInput.Get(LongOverlap, "39"),
+            ["video_crf"] = 17, ["filename_prefix"] = "video/H3_Long_Lip_Sync/Swarm"
+        });
+    }
+
+    private static void FinalizeLongLipSync(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(LongLipSync, false)) return;
+        if (!InitAudioStates.TryGetValue(g, out InitAudioState state) || state.LongOutput is null)
+            throw new SwarmUserErrorException("H3 Long Lip Sync requires Init Audio and a MiniMax H3 model or Video Model.");
+        // Keep the shared sampler and its upstream model/reference graph. This
+        // also covers the separate Image To Video generation branch.
+        HashSet<string> keep = [];
+        void Visit(string id)
+        {
+            if (!keep.Add(id)) return;
+            foreach (JProperty input in ((JObject)g.Workflow[id]["inputs"]).Properties())
+            {
+                JToken value = input.Value;
+                if (value is JArray link && link.Count == 2 && g.Workflow.ContainsKey($"{link[0]}"))
+                    Visit($"{link[0]}");
+            }
+        }
+        Visit(state.LongOutput);
+        foreach (string id in g.Workflow.Properties().Select(p => p.Name).Where(id => !keep.Contains(id)).ToArray())
+            g.Workflow.Remove(id);
     }
 
     /// <summary>The sampled audio latent is the init audio locked in place; put the user's own audio (normalized, cut to the video) on the file instead of a VAE round trip.</summary>
@@ -791,7 +869,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         if (!g.Features.Contains(SpeedFeatureId))
         {
-            Logs.Warning("MiniMax H3 4x Speed was requested but the backend does not have the MiniMaxH3SpeedOptimizer node. Update the ComfyUI-TeaCache node package.");
+            Logs.Warning("MiniMax H3 Optimizations was requested but the backend does not have the MiniMaxH3SpeedOptimizer node. Update the ComfyUI-TeaCache node package.");
             return;
         }
         double threshold = g.UserInput.Get(SpeedCacheThreshold, 0.08);
@@ -799,12 +877,15 @@ public class MiniMaxH3ReferencesExtension : Extension
         string optimizer = g.CreateNode("MiniMaxH3SpeedOptimizer", new JObject()
         {
             ["model"] = g.LoadingModel,
-            ["first_block_cache"] = true,
+            ["first_block_cache"] = g.UserInput.Get(SpeedFirstBlockCache, true),
             ["fbc_threshold"] = threshold,
             ["fbc_start_percent"] = 0.15,
             ["fbc_end_percent"] = 0.95,
             ["fbc_max_consecutive"] = 3,
             ["sparse_attention"] = sparse,
+            ["sparse_backend"] = "native",
+            ["sparse_extra_tokens"] = 256,
+            ["sparse_dense_last_steps"] = 1,
             ["sparse_dense_steps_pct"] = 0.20,
             ["sparse_dense_layers"] = 2,
             ["sparse_tau"] = 1.0,
@@ -822,7 +903,7 @@ public class MiniMaxH3ReferencesExtension : Extension
             });
             g.LoadingVAE = [vaeSpeed, 0];
         }
-        Logs.Info($"MiniMax H3 4x Speed enabled (cache threshold {threshold}, sparse attention {sparse}).");
+        Logs.Info($"MiniMax H3 Optimizations enabled (cache threshold {threshold}, sparse attention {sparse}).");
     }
 
     /// <summary>Model-gen step: wrap the loaded MiniMax H3 model with the exact-math low VRAM node.</summary>

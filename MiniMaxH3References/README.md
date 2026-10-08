@@ -99,7 +99,7 @@ the words themselves come from the audio.
 
 - Works with a text-only prompt (FL2VA), with **MiniMax H3 References** (Ref2VA), and with the
   **Init Image + Image To Video** flow when the Video Model is a MiniMax H3 model (set Init Image
-  Creativity to 0 as usual). It also stacks with 4x Speed, Low VRAM, and Video Face Inpainting (the
+  Creativity to 0 as usual). It also stacks with H3 Optimizations, Low VRAM, and Video Face Inpainting (the
   face pass keeps the same locked audio).
 - **Init Audio Match Duration** (default on) makes the video as long as the audio, rounded up to the
   model's 17k+5 frame grid at 24 FPS, ignoring Text2Video Frames / Video Frames. Turn it off to keep
@@ -113,26 +113,24 @@ the words themselves come from the audio.
   (normalized to 32 kHz stereo) rather than a VAE round trip. The group is designed to host other
   audio-video architectures later; with a non-H3 model it errors clearly.
 
-## MiniMax H3 4x Speed (Core Parameters checkbox)
+## Native SOL and long lip sync (1.18.0)
 
-Since v1.4.0 the extension also adds a **MiniMax H3 4x Speed** checkbox to SwarmUI's Core
-Parameters. It appears only while a MiniMax H3 architecture model is selected *and* the
-ComfyUI backend has the `MiniMaxH3SpeedOptimizer` node (shipped by
-[FurkanGozukara/ComfyUI-TeaCache](https://github.com/FurkanGozukara/ComfyUI-TeaCache)).
+**MiniMax H3 Optimizations** replaces the historical 4x label while retaining the saved
+`minimaxhxspeed` parameter ID. It wraps the shared backend's native ComfyUI SOL adapter,
+optional FirstBlockCache and batched VAE decoding. SOL and caching have separate switches.
+SOL `auto` benchmarks complete projected attention, checks finite output and requires a 5%
+win; `enabled` skips that benchmark and `disabled` retains the incoming attention path.
+Both SOL and cache reuse are approximate. There is no universal 4x speed claim.
 
-Enabling it wraps the loaded model and video VAE with the NVlabs Sana `sol-engine`
-acceleration line: FirstBlockCache step skipping, Sol-Attn sparse attention over the packed
-audio-video sequence, and batched VAE tile decoding. Every technique is verified on the
-active GPU at runtime — the sparse kernel is compiled, correctness-gated against dense
-attention on the model's own tensors, and micro-benchmarked against the incumbent attention
-backend — so whatever does not work or does not win on that specific GPU falls back to the
-normal path automatically. RTX 30xx and newer are supported (Triton backend everywhere,
-CuTe DSL on SM90/SM100/SM120 where installed).
+**MiniMax H3 Long Lip Sync** under Init Audio generates the complete soundtrack automatically
+with held latent overlap, native denoise masks and incremental video decoding. Its window and
+overlap controls apply to both the reference and Image To Video paths. It reduces drift from
+pixel re-encoding but does not guarantee indefinite identity or invisible joins.
 
-Two advanced parameters tune it under *Advanced Sampling*: **MiniMax H3 Speed Cache
-Threshold** (default 0.08, the NVlabs-advertised near-lossless policy; higher skips more
-aggressively) and **MiniMax H3 Speed Sparse
-Attention** (`auto` / `enabled` / `disabled`).
+See the [usage, presets and measured limits](LONG_LIP_SYNC.md). The long-mode presets default
+SOL/cache off, select the matching Turbo 4 LoRA and use 832x1248 at 24 fps. Import them from
+[presets/H3_Long_Lip_Sync.json](presets/H3_Long_Lip_Sync.json). The ordinary short Init Audio
+path and its optional face pass remain available when Long Lip Sync is disabled.
 
 ## MiniMax H3 Low VRAM (Core Parameters checkbox)
 
@@ -146,8 +144,7 @@ feedforward in token chunks. Unlike the speed parameter this changes nothing abo
 result: feedforward rows are independent and the INT8 activation quantizer works per row, so
 the output is bit-for-bit identical — verified end-to-end, where a full generation with it on
 decoded to pixel-identical and audio-identical output. It is not slower either, since the
-smaller working set keeps more of each matmul in cache. It stacks with **MiniMax H3 4x
-Speed**.
+smaller working set keeps more of each matmul in cache. It stacks with **MiniMax H3 Optimizations**.
 
 Measured on one real-geometry H3 block at 38k packed tokens on an RTX 5090: 3.84 GB peak
 unpatched, 3.30 GB with this on.

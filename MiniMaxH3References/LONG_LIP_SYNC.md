@@ -1,0 +1,13 @@
+# Native SOL and long H3 lip sync
+
+Version 1.18.0 uses the shared SECourses ComfyUI backend. Update SECoursesAudioTools and ComfyUI-TeaCache as well as this extension, then restart SwarmUI and its backend.
+
+Import [H3_Long_Lip_Sync.json](presets/H3_Long_Lip_Sync.json) in the SwarmUI Presets panel. Choose the First Frame preset with a portrait in Init Image, or References with the portrait attached beside the prompt. Add the complete narration under Init Audio. The supplied presets use 832x1248, Turbo 4, Euler/simple, CFG 1, 243-frame maximum windows and 39-frame held overlap. Duration follows the complete audio. First Frame uses FL2VA Turbo 4 v1.2 with video shift 6; References uses Ref2VA Turbo 4 v0.1 with video shift 12. Audio shift is 3.
+
+**MiniMax H3 Long Lip Sync** controls continuation. **MiniMax H3 Optimizations** independently enables SOL and FirstBlockCache. Its historical API/preset ID `minimaxhxspeed` is preserved. The FirstBlockCache control is independent; turn it off for an attention-only comparison. SOL `auto` benchmarks the complete native attention path and retains dense attention if it does not win. The long presets default SOL/cache off. No universal 4x speed claim is made.
+
+The controller retains clean video overlap and locked audio latents rather than re-encoding the previous window's pixels. This reduces one source of drift but does not guarantee indefinitely stable identity, perfect lip synchronization or invisible joins. It exports one H.264/AAC MP4 at 24 fps; resampling/AAC mean the soundtrack is not a bit-identical file copy. Original utterances and pauses are kept at their original speed. The separate H3 Video Face Inpainting pass cannot be combined with this incremental output; post-process retained copies when required.
+
+Implementation and longer explanation: [SECoursesAudioTools guide](https://github.com/FurkanGozukara/SECoursesAudioTools/blob/master/docs/h3_long_lipsync.md). Attention measurements: [ComfyUI-TeaCache native SOL audit](https://github.com/FurkanGozukara/ComfyUI-TeaCache/blob/main/docs/sol_attention_update.md).
+
+Validation: extension build (zero warnings/errors), historical parameter IDs, native reference and Image To Video graphs, and complete GPU runs: Ref2VA 832x1248/60 seconds in 753.98 seconds API wall time; Image To Video 512x768/30 seconds in 125.81 seconds. The latter passed sampled performance review. The reference clip changed framing despite a fixed-camera prompt. In the separate 15-clip FL2VA matrix, 13 passed review; 832x1248 at 45 and 60 seconds failed locked-scene continuity. Long mode is experimental, not a no-degradation guarantee. User/default Swarm settings are not changed by the audit's isolated test instance.
