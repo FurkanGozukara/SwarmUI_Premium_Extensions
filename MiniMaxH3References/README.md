@@ -104,6 +104,9 @@ the words themselves come from the audio.
 - **Init Audio Match Duration** (default on) makes the video as long as the audio, rounded up to the
   model's 17k+5 frame grid at 24 FPS, ignoring Text2Video Frames / Video Frames. Turn it off to keep
   your own frame count: longer audio is cut, shorter audio is padded with silence.
+  Since 1.18.1 this also resizes SwarmUI's own text-to-video, image-to-video and reference
+  latents (`SwarmEmptyMiniMaxH3LatentAV`, `SwarmMiniMaxH3CollectReferences`); 1.18.0 left those
+  at the frame count from the parameters.
 - Behind the scenes the extension uses the `SECoursesMiniMaxH3InitAudio` node from
   [FurkanGozukara/FoleyExtension](https://github.com/FurkanGozukara/FoleyExtension): the soundtrack
   is encoded once with the audio VAE, locked into the joint audio/video latent with a nested noise
