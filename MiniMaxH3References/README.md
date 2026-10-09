@@ -3,6 +3,39 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Saved RefMods and builder (1.19.0)
+
+Enable **MiniMax H3 RefMods** and use **Add RefMod** or **Import files**. Every row
+is optional, with its own enable checkbox, detail-retention strength and
+`all` / `visual` / `audio` component filter. Cite `@refmod1`, `@refmod2`, etc. in
+the prompt. A bundle may represent several numbered pictures, videos or audio
+references. Normal prompt attachments can be used alongside saved files.
+
+Files are stored on the **ComfyUI backend** in `models/refmods` (SwarmUI's sibling
+`Models/refmods` is also discovered). Refresh after copying or building a file.
+There is no fixed number of file slots; context size and VRAM limit practical
+use. The picker shows their additional reference-token cost. Empty, disabled and
+zero-strength rows preserve ordinary generation. Active files automatically select
+the matching Ref2VA checkpoint and the supplied 4/8-step Ref2V turbo LoRA.
+
+Apply **MiniMax H3 RefMod Builder - Images Video Audio - 261009**, attach media
+above the prompt, set **RefMod Name**, and Generate. Only the backend video/audio
+VAEs execute; a source preview returns to SwarmUI. **One character** groups photos
+as one visual reference; **Separate references** keeps independent pictures.
+Resolution 512 and compression **none** are the starting defaults. Compression
+uses spatial pooling, not gradient training. Videos include their soundtracks.
+Existing files receive numbered names. A portable bundle supports 256 members.
+
+The updated FoleyExtension backend reads MiniMaxH3Mod v4/legacy standalone files,
+v5 bundles and Fantastic files with embedded encoder frames. New bundles work in
+both projects. Audio-only use should select the **audio** component of mixed
+bundles. Both native long lip-sync presets support RefMods. This feature adds
+reference conditioning, not a guarantee of exact identity or voice cloning.
+
+The builder is included in `presets/H3_RefMods.json` and in the installer preset
+pack. Use the current installer/update scripts to obtain both this extension and
+the matching FoleyExtension nodes; no third-party RefMod pack is required.
+
 ## Prompt media uploader for every model (since 1.15.0)
 
 The prompt attachment area is upgraded for every model, not only MiniMax H3. SwarmUI's own prompt media

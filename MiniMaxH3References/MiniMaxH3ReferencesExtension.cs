@@ -18,7 +18,7 @@ using SwarmUI.WebAPI;
 namespace FurkanGozukara.SwarmExtensions.MiniMaxH3References;
 
 /// <summary>Adds complete MiniMax H3 image, video, and audio reference inputs to SwarmUI.</summary>
-public class MiniMaxH3ReferencesExtension : Extension
+public partial class MiniMaxH3ReferencesExtension : Extension
 {
     private static bool _initialized;
     private static T2IRegisteredParam<bool> Enabled;
@@ -86,7 +86,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.18.1";
+        Version = "1.19.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -119,6 +119,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         RegisterParameters();
         RegisterFaceInpaintParameters();
         RegisterInitAudioParameters();
+        RegisterRefModParameters();
         // Audio-only H3 intentionally uses a 32px disposable video stream and
         // supports the native H3 frame range beyond SwarmUI's generic video cap.
         // Provide those relaxed types only while Audio Only is enabled, and parse
@@ -147,6 +148,7 @@ public class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(ApplySamplingShiftOverrides, 99);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         WorkflowGenerator.AddStep(FinalizeLongLipSync, 200);
+        WorkflowGenerator.AddStep(ApplyRefMods, 201);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
     }
 
@@ -1030,6 +1032,10 @@ public class MiniMaxH3ReferencesExtension : Extension
         }
         if (images.Count + videos.Count + audios.Count == 0)
         {
+            if (ActiveRefMods(g).Length > 0)
+            {
+                return;
+            }
             if (audioOnly)
             {
                 Logs.Info("MiniMax H3 Audio Only has no attachments; using text-only conditioning.");
@@ -1222,6 +1228,8 @@ public class MiniMaxH3ReferencesExtension : Extension
             ["audio"] = g.CurrentMedia.Path,
             ["filename_prefix"] = "audio/SwarmUI_MiniMax_H3_Audio_Only"
         }, "9");
+        // Audio-only output ends workflow construction here, before final steps.
+        ApplyRefMods(g);
         g.SkipFurtherSteps = true;
         Logs.Info("MiniMax H3 Audio Only will return one lossless FLAC and no video output.");
     }
@@ -1407,6 +1415,10 @@ public class MiniMaxH3ReferencesExtension : Extension
 
     private static bool HasAnyReferences(WorkflowGenerator g)
     {
+        if (ActiveRefMods(g).Length > 0)
+        {
+            return true;
+        }
         if (g.UserInput.Get(T2IParamTypes.PromptImages, new List<Image>()).Count > 0)
         {
             return true;

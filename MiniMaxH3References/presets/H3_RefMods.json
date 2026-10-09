@@ -1,0 +1,38 @@
+{
+  "MiniMax H3 RefMod Builder - Images Video Audio - 261009": {
+    "author": "SECourses",
+    "title": "MiniMax H3 RefMod Builder - Images Video Audio - 261009",
+    "description": "Build a reusable RefMod bundle from the prompt uploader: add photos of one character, video, audio, or a mixture. Set MiniMax H3 RefMod Name and click Generate. The backend runs only the video/audio VAEs, saves a safetensors bundle in models/refmods, and returns a source preview. Refresh the RefMod picker to use it in any H3 preset. One character stacks photos; Separate references preserves individual pictures. No compression is the default. Existing files receive numbered names. Requires MiniMaxH3References 1.19.0 and updated FoleyExtension.",
+    "preview_image": "",
+    "is_starred": false,
+    "param_map": {
+      "model": "minimax_h3_ref2va_pruned_int8_convrot",
+      "minimaxhreferences": "true",
+      "minimaxhrefmodbuilder": "true",
+      "minimaxhrefmodname": "my_character",
+      "minimaxhrefmodresolution": "512",
+      "minimaxhrefmodimagemode": "one character",
+      "minimaxhrefmodcompression": "none",
+      "minimaxhrefmods": "false",
+      "minimaxhrefmodselection": "[]",
+      "minimaxhxspeed": "false",
+      "minimaxhaudioonly": "false",
+      "minimaxhlonglipsync": "false",
+      "videofaceinpainting": "false",
+      "continuefromlastvideoframes": "false",
+      "initimage": "",
+      "initaudio": "",
+      "loras": "",
+      "prompt": "",
+      "steps": "1",
+      "cfgscale": "1",
+      "textvideoframes": "362",
+      "width": "512",
+      "height": "512",
+      "aspectratio": "1:1",
+      "sidelength": "512",
+      "minimaxhreferenceimagesize": "match",
+      "minimaxhreferencemaxseconds": "15"
+    }
+  }
+}
