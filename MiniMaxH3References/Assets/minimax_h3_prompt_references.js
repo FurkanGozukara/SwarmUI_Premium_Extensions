@@ -1749,6 +1749,16 @@ function minimaxH3LongLipSyncFeature() {
     return [add, remove];
 }
 
+/** The mouth pass finishes MiniMax H3 base or Image To Video frames, so it follows the same model gating as Long Lip Sync. */
+function minimaxH3MouthPassFeature() {
+    let flag = 'secourses_h3_mouth_pass';
+    let [add, remove] = minimaxH3NodeGatedFeature(flag);
+    if (remove.includes(flag) && minimaxH3VideoModelSelected()) {
+        return [[flag], []];
+    }
+    return [add, remove];
+}
+
 if (typeof featureSetChangers != 'undefined') {
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_speed'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_low_vram'));
@@ -1756,6 +1766,7 @@ if (typeof featureSetChangers != 'undefined') {
     featureSetChangers.push(() => minimaxH3InitAudioFeature());
     featureSetChangers.push(() => minimaxH3SamplingShiftFeature());
     featureSetChangers.push(() => minimaxH3LongLipSyncFeature());
+    featureSetChangers.push(() => minimaxH3MouthPassFeature());
     // re-evaluate when the Image To Video model or group toggle changes (the core only re-evaluates on base model
     // changes); delegated so it also works when the parameter inputs are (re)built after this script loads
     document.addEventListener('change', (event) => {

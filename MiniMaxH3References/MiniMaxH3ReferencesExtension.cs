@@ -45,6 +45,14 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     private static T2IRegisteredParam<bool> InitAudioMatchDuration, LongLipSync;
     private static T2IRegisteredParam<string> LongWindow, LongOverlap;
     public const string LongLipSyncFeatureId = "secourses_h3_long_lip_sync";
+    // Mouth Pass group (aligned CodeFormer restoration of the mouth only, on the final MiniMax H3 frames)
+    private static T2IRegisteredParam<bool> MouthPass;
+    private static T2IRegisteredParam<double> MouthFidelity, MouthBlend;
+    private static T2IRegisteredParam<string> MouthModel, MouthDetector;
+
+    /// <summary>Feature id advertised when the ComfyUI backend has SECodeFormerMouthImages (shipped by FurkanGozukara/SECoursesAudioTools,
+    /// in the same release as the mouth inputs of SEH3LongLipSync).</summary>
+    public const string MouthPassFeatureId = "secourses_h3_mouth_pass";
 
     /// <summary>Feature id advertised when the ComfyUI backend has the SECoursesMiniMaxH3InitAudio node (shipped by FurkanGozukara/FoleyExtension).</summary>
     public const string InitAudioFeatureId = "minimax_h3_init_audio";
@@ -86,7 +94,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.19.1";
+        Version = "1.20.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -116,8 +124,10 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3FaceStitch"] = FaceInpaintFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesMiniMaxH3InitAudio"] = InitAudioFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SEH3LongLipSync"] = LongLipSyncFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["SECodeFormerMouthImages"] = MouthPassFeatureId;
         RegisterParameters();
         RegisterFaceInpaintParameters();
+        RegisterMouthPassParameters();
         RegisterInitAudioParameters();
         RegisterRefModParameters();
         // Audio-only H3 intentionally uses a 32px disposable video stream and
@@ -145,6 +155,11 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(SaveAudioOnlyLossless, 9.9);
         // after both the base (10) and Image To Video (11) saves: put the user's own audio on the file
         WorkflowGenerator.AddStep(UseInitAudioAsOutputSoundtrack, 11.5);
+        // the core's final save (100) rebuilds the output save node from the current media, which dropped that swap
+        WorkflowGenerator.AddStep(UseInitAudioAsOutputSoundtrack, 100.5);
+        // after Image To Video (11) and Extend Video (12), before frame interpolation (50) and the final save (100), which
+        // rebuilds the save node from the current frames: restore the mouth on the final MiniMax H3 frames
+        WorkflowGenerator.AddStep(ApplyMouthPass, 13);
         WorkflowGenerator.AddStep(ApplySamplingShiftOverrides, 99);
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         WorkflowGenerator.AddStep(FinalizeLongLipSync, 200);
@@ -393,6 +408,40 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         return requested;
     }
 
+    /// <summary>"MiniMax H3 Mouth Pass" group: directly after Video Face Inpainting (-40). The JS side shows it only while a MiniMax H3
+    /// base or Image To Video model is selected; the feature flag hides it when the backend lacks SECodeFormerMouthImages.</summary>
+    private static void RegisterMouthPassParameters()
+    {
+        T2IParamGroup group = new("MiniMax H3 Mouth Pass", Open: false, OrderPriority: -39,
+            Description: "Optional finishing pass for talking videos: aligned CodeFormer restores only the mouth area of every final frame "
+                + "and blends it back with a feathered mask, the same recipe as AvatarForever's Mouth Enhancement and the ComfyUI MiniMax H3 Lip Synch preset. "
+                + "Frame count, timing, audio and every pixel outside the mouth stay the same. Works with Init Audio, Long Lip Sync and any MiniMax H3 video. "
+                + "Needs codeformer.pth (Models/facerestore_models) and det_10g.onnx (Models/insightface/models/buffalo_l), both in the MiniMax-H3 Core Bundle.");
+        MouthPass = T2IParamTypes.Register<bool>(new("MiniMax H3 Mouth Pass",
+            "Restore the mouth of every final frame with aligned CodeFormer. Requires a MiniMax H3 model and updated SECoursesAudioTools on the backend. "
+            + "Off (default) keeps the generated frames.",
+            "false", IgnoreIf: "false", FeatureFlag: MouthPassFeatureId, Group: group, OrderPriority: -10, ChangeWeight: 2));
+        MouthFidelity = T2IParamTypes.Register<double>(new("MiniMax H3 Mouth Pass Fidelity",
+            "CodeFormer fidelity: higher keeps more of the generated mouth, lower restores more strongly. 0.9 is the tested recipe.",
+            "0.9", Min: 0, Max: 1, Step: 0.01, FeatureFlag: MouthPassFeatureId, Group: group, OrderPriority: -9, DependNonDefault: MouthPass.Type.ID));
+        MouthBlend = T2IParamTypes.Register<double>(new("MiniMax H3 Mouth Pass Blend",
+            "How much of the restored mouth is blended in through the feathered mouth mask. 0.7 is the tested recipe; 0 leaves every frame unchanged.",
+            "0.7", Min: 0, Max: 1, Step: 0.01, FeatureFlag: MouthPassFeatureId, Group: group, OrderPriority: -8, DependNonDefault: MouthPass.Type.ID));
+        MouthModel = T2IParamTypes.Register<string>(new("MiniMax H3 Mouth Pass Model",
+            "Existing CodeFormer checkpoint in Models/facerestore_models. No automatic download.",
+            "codeformer.pth", FeatureFlag: MouthPassFeatureId, Group: group, OrderPriority: -7, IsAdvanced: true, DependNonDefault: MouthPass.Type.ID));
+        MouthDetector = T2IParamTypes.Register<string>(new("MiniMax H3 Mouth Pass Detector",
+            "Existing SCRFD face detector, relative to Models/insightface. No automatic download.",
+            "models/buffalo_l/det_10g.onnx", FeatureFlag: MouthPassFeatureId, Group: group, OrderPriority: -6, IsAdvanced: true, DependNonDefault: MouthPass.Type.ID));
+    }
+
+    /// <summary>The mouth pass inputs shared by SECodeFormerMouthImages (fidelity/mouth_blend/model/detector) and SEH3LongLipSync (mouth_ prefixed).</summary>
+    private static (double Fidelity, double Blend, string Model, string Detector) MouthPassSettings(WorkflowGenerator g)
+    {
+        return (g.UserInput.Get(MouthFidelity, 0.9), g.UserInput.Get(MouthBlend, 0.7),
+            g.UserInput.Get(MouthModel, "codeformer.pth"), g.UserInput.Get(MouthDetector, "models/buffalo_l/det_10g.onnx"));
+    }
+
     /// <summary>"Init Audio" group: sits directly above "Init Image" (-5). One optional soundtrack the generated video must follow.
     /// MiniMax H3 is the first architecture behind it; other audio-video models can be added to the same parameters later.</summary>
     private static void RegisterInitAudioParameters()
@@ -558,7 +607,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         if (g.UserInput.Get(FaceInpaint, false))
             throw new SwarmUserErrorException("H3 Long Lip Sync exports incrementally; disable the separate Video Face Inpainting pass for this mode.");
         InitAudioState state = InitAudioStates.GetOrCreateValue(g);
-        state.LongOutput = g.CreateNode("SEH3LongLipSync", new JObject()
+        JObject inputs = new()
         {
             ["model"] = model, ["positive"] = positive, ["latent"] = latent,
             ["audio"] = WorkflowGenerator.NodePath(state.LoadedAudio, 0),
@@ -567,7 +616,21 @@ public partial class MiniMaxH3ReferencesExtension : Extension
             ["window_frames"] = g.UserInput.Get(LongWindow, "243"),
             ["overlap_frames"] = g.UserInput.Get(LongOverlap, "39"),
             ["video_crf"] = 17, ["filename_prefix"] = "video/H3_Long_Lip_Sync/Swarm"
-        });
+        };
+        if (g.UserInput.Get(MouthPass, false))
+        {
+            // The long node encodes as it decodes, so it restores each decoded chunk itself; an older node would ignore these inputs.
+            if (!g.Features.Contains(MouthPassFeatureId))
+                throw new SwarmUserErrorException("MiniMax H3 Mouth Pass needs updated SECoursesAudioTools on the backend. Update it and restart the backend.");
+            (double fidelity, double blend, string mouthModel, string detector) = MouthPassSettings(g);
+            inputs["mouth_pass"] = true;
+            inputs["mouth_fidelity"] = fidelity;
+            inputs["mouth_blend"] = blend;
+            inputs["mouth_model"] = mouthModel;
+            inputs["mouth_detector"] = detector;
+            Logs.Info($"MiniMax H3 Mouth Pass runs inside Long Lip Sync (fidelity {fidelity}, blend {blend}).");
+        }
+        state.LongOutput = g.CreateNode("SEH3LongLipSync", inputs);
     }
 
     private static void FinalizeLongLipSync(WorkflowGenerator g)
@@ -825,6 +888,44 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         });
         g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(stitch, 0));
         Logs.Info($"MiniMax H3 Video Face Inpainting added (faces '{g.UserInput.Get(FaceFaces, "1")}', denoise {g.UserInput.Get(FaceDenoise, 0.55)}, geometry lock {g.UserInput.Get(FaceGeometryLock, true)}, size-aware stitch {g.UserInput.Get(FaceSizeAwareStitch, true)}, size scaling {g.UserInput.Get(FaceSizeScaling, false)}, {(condClass == "MiniMaxH3ReferenceToVideo" ? "reference" : "plain")} conditioning).");
+    }
+
+    /// <summary>CodeFormer mouth pass on the final MiniMax H3 frames (base generation, Image To Video and extended videos alike).
+    /// Long Lip Sync restores the mouth inside its own node while it encodes (see AddLongLipSync).</summary>
+    private static void ApplyMouthPass(WorkflowGenerator g)
+    {
+        if (!g.UserInput.Get(MouthPass, false) || g.UserInput.Get(AudioOnly, false) || g.UserInput.Get(LongLipSync, false))
+        {
+            return;
+        }
+        bool h3Selected = IsMiniMaxH3Model(g.UserInput.Get(T2IParamTypes.Model, null))
+            || (g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel videoModel) && IsMiniMaxH3Model(videoModel));
+        if (!h3Selected)
+        {
+            // A value left over from an earlier preset (or sent by an API client) must not affect other models.
+            Logs.Debug("MiniMax H3 Mouth Pass is on but no MiniMax H3 model or Video Model is selected; ignoring it.");
+            return;
+        }
+        if (!g.Features.Contains(MouthPassFeatureId))
+        {
+            throw new SwarmUserErrorException("MiniMax H3 Mouth Pass needs the CodeFormer Mouth Pass (Images) node on the ComfyUI backend. Update SECoursesAudioTools and restart the backend.");
+        }
+        if (g.CurrentMedia is null || !g.CurrentMedia.IsRawMedia || g.CurrentMedia.DataType == WGNodeData.DT_AUDIO)
+        {
+            throw new SwarmReadableErrorException($"MiniMax H3 Mouth Pass expected decoded frames but received {g.CurrentMedia?.DataType}.");
+        }
+        (double fidelity, double blend, string model, string detector) = MouthPassSettings(g);
+        string mouth = g.CreateNode("SECodeFormerMouthImages", new JObject()
+        {
+            ["images"] = g.CurrentMedia.Path,
+            ["enabled"] = true,
+            ["fidelity"] = fidelity,
+            ["mouth_blend"] = blend,
+            ["model"] = model,
+            ["detector"] = detector
+        });
+        g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(mouth, 0));
+        Logs.Info($"MiniMax H3 Mouth Pass added (fidelity {fidelity}, blend {blend}).");
     }
 
     /// <summary>Use FL2VA for text-only audio and Ref2VA only when this request has attachments.</summary>

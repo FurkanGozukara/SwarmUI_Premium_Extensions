@@ -3,6 +3,28 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## MiniMax H3 Mouth Pass (1.20.0)
+
+The new **MiniMax H3 Mouth Pass** group (closed by default, directly after Video Face Inpainting) restores
+only the mouth of every final frame with aligned CodeFormer and blends it back through a feathered mouth
+mask: the recipe of AvatarForever's Mouth Enhancement and of the ComfyUI MiniMax H3 Lip Synch preset
+(fidelity **0.9**, blend **0.7**). Frame count, timing, audio and every pixel outside the mouth stay the same.
+
+- It runs on the final frames of any MiniMax H3 video: text, references, Image To Video and Init Audio
+  generations, after Image To Video and Extend Video and before frame interpolation and the save
+  (`SECodeFormerMouthImages`, workflow step 13).
+- With **MiniMax H3 Long Lip Sync** the long node restores each decoded chunk itself before encoding
+  (`SEH3LongLipSync` mouth inputs), because it writes its own MP4.
+- It follows the MiniMax H3 model gating of Long Lip Sync, and the server ignores a leftover value when no
+  MiniMax H3 model is selected.
+- Needs SECoursesAudioTools with `SECodeFormerMouthImages`, `codeformer.pth` in Models/facerestore_models and
+  `models/buffalo_l/det_10g.onnx` under Models/insightface (both in the MiniMax-H3 Core Bundle). Model and
+  detector names are advanced options; nothing is downloaded automatically.
+
+Init Audio outputs carry the original soundtrack again. SwarmUI's final save rebuilds the output save node
+from the current media, which replaced the swap to the user's own audio with the VAE-decoded audio stream;
+the swap now also runs after that final save.
+
 ## Long Lip Sync with other models and its token estimate (1.19.1)
 
 **MiniMax H3 Long Lip Sync** and its window and overlap controls now follow the same model gating as
