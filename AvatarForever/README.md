@@ -28,5 +28,12 @@ All model selectors use existing local files; this extension never downloads
 models. The released four-step schedule controls sampling; Main Steps, CFG,
 negative prompt, refiner and unrelated video controls are not applied.
 
+Since 1.0.2 an enabled AvatarForever tells SwarmUI to skip its generic model
+preload, which treated the checkpoint as plain LTX 2.3 and downloaded a second
+text projection and audio VAE. The checkpoint name must contain `avatarforever`
+(the downloader saves `avatarforever-ltx-2.3-22b-INT8-ConvRot-HQ.safetensors`):
+with any other main model, for example after applying another preset,
+AvatarForever stays off for that generation.
+
 Model recipe, features and measured limits have one home:
 [AvatarForever node documentation](https://github.com/FurkanGozukara/SECoursesAudioTools/blob/master/docs/avatarforever.md).

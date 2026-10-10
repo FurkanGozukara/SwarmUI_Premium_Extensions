@@ -23,7 +23,7 @@ public class AvatarForeverExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "AvatarForever: audio + optional image to long lip-synced video, native INT8 and optional ForeverCache.";
         License = "MIT";
-        Version = "1.0.1";
+        Version = "1.0.2";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/AvatarForever";
     }
 
@@ -73,6 +73,21 @@ public class AvatarForeverExtension : Extension
         Number("mouth_blend", "Mouth Blend", .7, 0, 1, "Feathered mouth-only blend; 0 leaves frames unchanged.");
         Text("mouth_model", "Mouth Model", "codeformer.pth", "Existing checkpoint under models/facerestore_models. No automatic download.");
         Text("mouth_detector", "Mouth Detector", "models/buffalo_l/det_10g.onnx", "Existing SCRFD detector under models/insightface. No automatic download.");
+        T2IParamInput.SpecialParameterHandlers.Add(input =>
+        {
+            if (!input.Get(Enabled, false)) return;
+            // Applying another preset does not reset parameters absent from it.
+            if (!IsAvatarForeverModel(input.Get(T2IParamTypes.Model)))
+            {
+                input.Remove(Enabled);
+                input.RequiredFlags.Remove("secourses_avatarforever");
+                return;
+            }
+            // Swarm's preliminary loader does not copy extension parameters: it would load this
+            // checkpoint as plain LTX 2.3 and download that loader's projection and audio VAE.
+            // This graph loads the selected model and its companions itself.
+            input.Set(T2IParamTypes.NoLoadModels, true);
+        });
         // Before the normal loader/audio steps: they can auto-download fallback
         // models and implement speaker-reference audio rather than frozen audio.
         WorkflowGenerator.AddStep(Generate, -16);
@@ -88,6 +103,10 @@ public class AvatarForeverExtension : Extension
         void Text(string key, string name, string value, string help, string[] choices = null) =>
             Strings[key] = T2IParamTypes.Register<string>(new("AvatarForever " + name, help, value, GetValues: choices is null ? null : _ => [.. choices], Group: group, DependNonDefault: Enabled.Type.ID));
     }
+
+    // Swarm sorts the checkpoint as LTX 2.3; only its file name identifies it as AvatarForever.
+    private static bool IsAvatarForeverModel(T2IModel model) =>
+        model?.Name?.Contains("avatarforever", System.StringComparison.OrdinalIgnoreCase) == true;
 
     private static void Generate(WorkflowGenerator g)
     {
