@@ -86,7 +86,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.19.0";
+        Version = "1.19.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -574,7 +574,17 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     {
         if (!g.UserInput.Get(LongLipSync, false)) return;
         if (!InitAudioStates.TryGetValue(g, out InitAudioState state) || state.LongOutput is null)
+        {
+            // A Long Lip Sync value left over from an earlier preset (or sent by an API client) must not break other models.
+            bool h3Selected = IsMiniMaxH3Model(g.UserInput.Get(T2IParamTypes.Model, null))
+                || (g.UserInput.TryGet(T2IParamTypes.VideoModel, out T2IModel videoModel) && IsMiniMaxH3Model(videoModel));
+            if (!h3Selected)
+            {
+                Logs.Debug("MiniMax H3 Long Lip Sync is on but no MiniMax H3 model or Video Model is selected; ignoring it.");
+                return;
+            }
             throw new SwarmUserErrorException("H3 Long Lip Sync requires Init Audio and a MiniMax H3 model or Video Model.");
+        }
         // Keep the shared sampler and its upstream model/reference graph. This
         // also covers the separate Image To Video generation branch.
         HashSet<string> keep = [];

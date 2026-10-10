@@ -320,7 +320,14 @@ PromptTokenEstimators.push({
         }
         if (initAudioData) {
             spec.audioGuide = true;
-            if (matchAudioDuration !== false) {
+            if (ctx.param('minimaxhlonglipsync') === true) {
+                // Long Lip Sync samples the soundtrack in windows of at most H3 Long Window Frames, one packed sequence each.
+                let window = H3.alignFrames(Number(ctx.param('hlongwindowframes')) || 243);
+                spec.frames = initAudio?.duration ? Math.min(window, H3.framesForSeconds(initAudio.duration)) : window;
+                approximate = approximate || !initAudio?.duration;
+                label = `${label} · long lip sync window`;
+            }
+            else if (matchAudioDuration !== false) {
                 if (initAudio?.duration) {
                     spec.frames = H3.framesForSeconds(initAudio.duration);
                 }
@@ -1731,12 +1738,24 @@ function minimaxH3SamplingShiftFeature() {
     return [add, remove];
 }
 
+/** Long Lip Sync belongs to the Init Audio flow, so it follows the same MiniMax H3 base or Image To Video model gating.
+ * Gated only by its backend node, the checkbox stayed on after a Long Lip Sync preset and was sent with other models. */
+function minimaxH3LongLipSyncFeature() {
+    let flag = 'secourses_h3_long_lip_sync';
+    let [add, remove] = minimaxH3NodeGatedFeature(flag);
+    if (remove.includes(flag) && minimaxH3VideoModelSelected()) {
+        return [[flag], []];
+    }
+    return [add, remove];
+}
+
 if (typeof featureSetChangers != 'undefined') {
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_speed'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_low_vram'));
     featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_face_inpaint'));
     featureSetChangers.push(() => minimaxH3InitAudioFeature());
     featureSetChangers.push(() => minimaxH3SamplingShiftFeature());
+    featureSetChangers.push(() => minimaxH3LongLipSyncFeature());
     // re-evaluate when the Image To Video model or group toggle changes (the core only re-evaluates on base model
     // changes); delegated so it also works when the parameter inputs are (re)built after this script loads
     document.addEventListener('change', (event) => {

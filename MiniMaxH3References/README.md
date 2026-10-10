@@ -3,6 +3,19 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Long Lip Sync with other models and its token estimate (1.19.1)
+
+**MiniMax H3 Long Lip Sync** and its window and overlap controls now follow the same model gating as
+Init Audio: they are shown and sent only while a MiniMax H3 base model, or a MiniMax H3 Video Model in
+Image To Video, is selected. Before, the checkbox stayed on after a Long Lip Sync preset, and every later
+generation with another model (for example a FLUX preset) failed with "H3 Long Lip Sync requires Init
+Audio and a MiniMax H3 model or Video Model". The server also ignores a leftover Long Lip Sync value when
+no MiniMax H3 model is selected, so API clients and old presets are covered too.
+
+The prompt token meter now estimates one Long Lip Sync window (at most **H3 Long Window Frames**) instead
+of the whole Init Audio, which turned the meter red for any soundtrack longer than a few seconds although
+each window is sampled separately.
+
 ## Saved RefMods and builder (1.19.0)
 
 Enable **MiniMax H3 RefMods** and use **Add RefMod** or **Import files**. Every row
