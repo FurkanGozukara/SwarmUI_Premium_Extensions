@@ -1,0 +1,17 @@
+.flux-three-layout, .flux-three-batch { width: 100%; margin-top: .6rem; }
+.flux-three-help { font-size: .87rem; line-height: 1.4; opacity: .9; margin: .4rem 0 .7rem; }
+.flux-three-canvas { display: block; width: 100%; height: auto; margin: 0 auto; border: 1px solid #718096; border-radius: 6px; touch-action: none; cursor: crosshair; }
+.flux-three-canvas:focus-visible { outline: 3px solid #3b82f6; outline-offset: 2px; }
+.flux-three-toolbar { display: flex; flex-wrap: wrap; gap: .35rem; margin: .65rem 0; }
+.flux-three-button { font-size: .8rem; padding: .3rem .5rem; }
+.flux-three-select, .flux-three-description, .flux-three-lettering { width: 100%; max-width: 100%; box-sizing: border-box; margin: .25rem 0; }
+.flux-three-description { min-height: 4.5rem; resize: vertical; padding: .4rem; }
+.flux-three-coordinates { display: grid; grid-template-columns: 1fr 1fr; gap: .35rem .6rem; }
+.flux-three-coordinates label { display: flex; align-items: center; justify-content: space-between; font-size: .8rem; gap: .3rem; }
+.flux-three-coordinates input { width: 5.2em; min-width: 0; }
+.flux-three-error { color: #e89179; font-size: .85rem; margin-top: .4rem; }
+.flux-three-json { width: 100%; font-family: monospace; font-size: .8rem; }
+.flux-three-prompt-row { border-top: 1px solid #71809666; padding: .6rem 0; }
+.flux-three-prompt-row strong { font-size: .85rem; overflow-wrap: anywhere; }
+.flux-three-batch-status { font-size: .86rem; line-height: 1.4; margin-top: .5rem; }
+.flux-three-layout [hidden], .flux-three-batch [hidden], .flux-three-json[hidden] { display: none !important; }
