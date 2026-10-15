@@ -23,13 +23,30 @@ public class AvatarForeverExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "AvatarForever: audio + optional image to long lip-synced video, native INT8 and optional ForeverCache.";
         License = "MIT";
-        Version = "1.0.2";
+        Version = "1.0.3";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/AvatarForever";
     }
 
     public override void OnPreInit()
     {
         ComfyUIBackendExtension.NodeToFeatureMap["SEAvatarForeverSampler"] = "secourses_avatarforever";
+        // Interrupted FFmpeg outputs can have an open-ended mdat and no moov.
+        // ATL's metadata reader can hang on those files, blocking History and
+        // eventually every HTTP connection in a browser with several tabs.
+        var previousReader = MediaMetaType.Video.FromRawData;
+        MediaMetaType.Video.FromRawData = (data, type) =>
+            type.Extension is "mp4" or "mov" && !IsoBmffMetadataGuard.HasCompleteMovie(data)
+                ? new UnfinalizedVideoFile(data, type)
+                : previousReader(data, type);
+    }
+
+    private sealed class UnfinalizedVideoFile(byte[] data, MediaType type) : VideoFile(data, type)
+    {
+        public override string GetMetadata()
+        {
+            Logs.Warning("Skipped metadata for an incomplete MP4/MOV container in media history; original bytes are unchanged.");
+            return null;
+        }
     }
 
     public override void OnInit()

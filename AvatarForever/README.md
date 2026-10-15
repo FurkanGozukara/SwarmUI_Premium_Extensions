@@ -37,3 +37,11 @@ AvatarForever stays off for that generation.
 
 Model recipe, features and measured limits have one home:
 [AvatarForever node documentation](https://github.com/FurkanGozukara/SECoursesAudioTools/blob/master/docs/avatarforever.md).
+
+Since 1.0.3, incomplete MP4/MOV containers are skipped during metadata reading.
+An interrupted encode can leave an open-ended `mdat` without a `moov` box. The
+native metadata reader can hang on that file, leaving History requests pending;
+with several browser tabs, even unrelated final images can stop loading.
+The guard checks top-level box bounds and movie-header presence before that
+reader runs. Complete files use the existing reader. Original media bytes and
+generation settings are unchanged. Restart SwarmUI after updating.
