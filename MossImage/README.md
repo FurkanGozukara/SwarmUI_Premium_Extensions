@@ -40,9 +40,10 @@ batch size, variation seed and LoRAs.
 
 ## Presets
 
-Use **Direct Apply** on a preset card. All four use the SFT INT8 model,
-`qwen3.5_9b_int8_convrot`, `Flux/flux2-vae`, PyTorch attention and SFT De-Band;
-every file is in the downloader's MOSS-Image Core Bundle.
+Use **Direct Apply** on a preset card. The four SFT presets and the two Base
+presets use `qwen3.5_9b_int8_convrot`, `Flux/flux2-vae`, PyTorch attention and
+SFT De-Band (skipped for Base); every file is in the downloader's MOSS-Image Core
+Bundle.
 
 | Preset | Recipe | 1024x1024, RTX 3090 |
 | --- | --- | --- |
@@ -50,9 +51,17 @@ every file is in the downloader's MOSS-Image Core Bundle.
 | Fast 25 Steps | 25 ER-SDE steps, simple scheduler, Score Rescaling 0.95, skip layers 22 and 24 from 10% to 70% | 24 s |
 | Turbo 8 Steps | lodestones 8-step DMD LoRA at 0.7 (community work in progress), 8 Euler steps, CFG 1, no negative prompt | 6 s |
 | Advanced Layout Boxes | Official recipe with three example layout boxes | 48 s |
+| Base - Advanced Text To Image | Base model, official recipe (quality-first) | 53 s |
+| Base - Advanced Layout Boxes | Base model, official recipe with the same layout boxes | 54 s |
 
-Large lettering held up in all four. Fast occasionally misspells small text, and
-Turbo can add stray signage; the 50-step preset is the most faithful.
+Large lettering held up in all six. Fast occasionally misspells small text, and
+Turbo can add stray signage; the 50-step presets are the most faithful.
+
+**Base** is the raw model: more varied images, and the model that LoRAs trained
+on Base expect; SFT gives clearer text grouping and more organized layouts. The
+Base presets keep the official 50 steps: with the same seed, 80 steps reproduced
+the 50-step image with no visible gain while taking about 60% longer. The 8-step
+Turbo LoRA was trained on SFT, so there is no Base Turbo preset.
 
 ## Prompting
 
@@ -100,7 +109,7 @@ latest upstream commits that day) on an RTX 3090. The ComfyUI graph with these
 settings reproduced official MOSS-Image Space examples from the same seed (same
 composition, subject and details).
 
-- Generated workflows of all four presets contain the expected nodes and values:
+- Generated workflows of all six presets contain the expected nodes and values:
   AuraFlow shift 5, PyTorch attention, the de-band LoRA (not for Base models),
   skip-layer and Score Rescaling settings, the DMD LoRA and the layout nodes. A
   FLUX.2 Klein model with the same parameters got none of them.
@@ -108,7 +117,9 @@ composition, subject and details).
   at the final resolution, compact JSON pass-through, seeded choices, weight
   removal (times and ratios kept) and `[red:blue:0.5]` schedules.
 - One real generation per preset rendered correctly (times above).
-- Headless Chrome: the Import dialog imported the four presets; Direct Apply,
+- Headless Chrome: the Import dialog imported the six presets; Direct Apply
+  (the Base presets select the Base model and show the MOSS-Image controls),
   drawing, editing and deleting a box, hiding the group for a FLUX.2 model, the
   selected-preset batch guard and a two-prompt Turbo batch all worked without
-  page errors.
+  page errors. Both Base presets rendered pixel-identical images to the ComfyUI Base
+  presets with the same seed.
