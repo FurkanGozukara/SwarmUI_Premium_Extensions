@@ -91,6 +91,36 @@ the output aspect ratio. Boxes guide composition; they are not inpainting masks.
 The extension builds the layout with the native `CreateBoundingBoxes` and
 `MOSSImageLayoutPrompt` nodes.
 
+## Image edit
+
+Choose **Image edit (attached images)** mode (or apply a MOSS Image Edit preset),
+drag the image to edit into the prompt box and write the instruction, for example
+`Change the background to a sunny beach, preserving the person's identity and pose.`
+Up to 4 images work: image 1 is edited, the others are references; name them
+`image 1`, `image 2` (or `@image1`, `@image2`) and say the role of each.
+
+The mode uses [ChenkinLab's Moss-Image-Edit](https://modelscope.cn/models/ChenkinLab/Moss-Image-Edit),
+a rank-64 LoRA trained on MOSS-Image SFT, re-hosted with ComfyUI LoRA keys as
+`MOSS_Image_Edit_LoRA.safetensors` in the MOSS-Image Core Bundle and added
+automatically. The LoRA alone does not edit: the SECoursesAudioTools **MOSS-Image
+Edit References** node adds its reference branch (the images pass through every
+block at timestep 0 and the result attends to them). Swarm's own MOSS-Image text
+encoder would also show the attached images to Qwen3.5, so the extension withholds
+them from it.
+
+- **Result size:** image 1 at up to **MOSS Image Edit Reference Size** on the long
+  side (default 1024, scaled down only). The adapter lines the result up with image
+  1 token by token, so the extension sets Width / Height to that size; smaller
+  images keep their own size. 512 is ChenkinLab's setting; 1536 also worked.
+- **Presets:** MOSS Image Edit - Advanced Image Edit (official recipe: 30 Euler
+  steps, normal scheduler, CFG 4, shift 5, empty negative, no layer skip; 9-12 s
+  per 1 MP edit on an RTX 5090) and Turbo 8 Steps (plus the DMD LoRA at 0.7, 8
+  steps, CFG 1; about 3 s).
+- Colors, clothes, expressions, lighting, seasons, backgrounds and style edit best.
+  A second image's object is placed well; copying its exact look is weaker. SFT is
+  required (Base lost the subject in one of two tests). ChenkinLab's code is GPLv3;
+  no separate license is stated for the weights.
+
 ## Prompt batches
 
 Use **Add prompt**, import multiple `.txt` files, or import a folder. Each text file
@@ -123,3 +153,18 @@ composition, subject and details).
   selected-preset batch guard and a two-prompt Turbo batch all worked without
   page errors. Both Base presets rendered pixel-identical images to the ComfyUI Base
   presets with the same seed.
+
+Image edit, validated on 2026-10-22 with SwarmUI `d74f8ce4` and ComfyUI `1a82e6d0`
+on an RTX 5090, SwarmUI started with `Windows_Start_SwarmUI.bat` and the presets
+imported with `Windows_Preset_Delete_Import.bat` (80 imported, 0 failed):
+
+- Generated workflows: the edit LoRA, de-band and the reference node (1024), one or
+  two images sent, the result at image 1's reference size (1024x688 for a
+  1728x1152 photo, 480x640 for a 481x640 photo, 512x336 with size 512), the
+  official and Turbo recipes, `@image1` sent as `image 1`, no images given to the
+  text encoder, edit mode without an image refused, Text mode and other models
+  unchanged.
+- Real generations: a rainy-night edit of a 2 MP car photo (30 steps and Turbo
+  3.3 s) and a beach background behind a portrait kept the subject, identity and
+  layout. In the browser, Direct Apply set the edit preset and a photo attached
+  with Add Image was edited correctly.

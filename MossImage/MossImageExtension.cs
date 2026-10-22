@@ -3,11 +3,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Builtin_ComfyUIBackend;
 using SwarmUI.Core;
+using SwarmUI.Media;
 using SwarmUI.Text2Image;
 using SwarmUI.Utils;
 
@@ -19,16 +21,24 @@ public class MossImageExtension : Extension
     private const string Feature = "secourses_moss_image";
     private const string AttentionFeature = "secourses_model_attention_backend";
     private const string RescalingFeature = "secourses_temporal_score_rescaling";
+    private const string EditFeature = "secourses_moss_image_edit";
     private const string TextMode = "Text / JSON prompt";
     private const string LayoutMode = "Layout boxes";
+    private const string EditMode = "Image edit (attached images)";
     private const string KitchenAttention = "Comfy Kitchen INT8 (fastest)";
     private const string PytorchAttention = "PyTorch (matches official)";
     private const string DefaultAttention = "Model / backend default";
     private const string InputError = "secourses_moss_input_error";
     public const string DeBandLora = "MOSS_Image_SFT_DeBand_L37-41.safetensors";
+    public const string EditLora = "MOSS_Image_Edit_LoRA.safetensors";
     private static T2IRegisteredParam<bool> Enabled, DeBand;
     private static T2IRegisteredParam<string> Mode, SkipLayers, Attention, Boxes, PromptList;
     private static T2IRegisteredParam<double> SkipStart, SkipEnd, ScoreRescaling;
+    private static T2IRegisteredParam<int> EditReferenceSize;
+    // @image1 / <image_1> of the other SECourses presets; Moss-Image-Edit was trained with "image 1", "image 2", ...
+    private static readonly Regex ImageLabel = new(@"@(?:image|img|picture|pic)(\d+)\b|<image_(\d+)>", RegexOptions.IgnoreCase);
+    /// <summary>Prompt images withheld from Swarm's MOSS text encoder while the edit reference branch holds them.</summary>
+    private static readonly ConditionalWeakTable<T2IParamInput, List<Image>> HeldPromptImages = new();
     private static readonly Regex Choice = new(@"(?<!\\)\{([^{}]*\|[^{}]*)\}");
     // (red car:1.2): Qwen3.5 reads weights literally, so keep only the words. A digit before the colon is not a weight: (10:30), (4:3).
     private static readonly Regex Weight = new(@"(?<!\\)\(([^()]*?[^\d\s():])\s*:\s*((?:\d+(?:\.\d*)?|\.\d+))\s*\)");
@@ -51,6 +61,7 @@ public class MossImageExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["MOSSImageLayoutPrompt"] = Feature;
         ComfyUIBackendExtension.NodeToFeatureMap["ModelAttentionBackend"] = AttentionFeature;
         ComfyUIBackendExtension.NodeToFeatureMap["TemporalScoreRescaling"] = RescalingFeature;
+        ComfyUIBackendExtension.NodeToFeatureMap["SEMossImageEditReferences"] = EditFeature;
     }
 
     public override void OnInit()
@@ -59,8 +70,10 @@ public class MossImageExtension : Extension
             Description: "Official MOSS-Image guidance: skip DiT layer 22 in the negative branch, 50 Euler steps, CFG 3, shift 5. Write plain prompts, tags or JSON layouts (up to 4K tokens). Layout boxes place objects, characters and text. Main seed, steps, CFG, sampler, resolution and LoRAs still apply.");
         Enabled = T2IParamTypes.Register<bool>(new("MOSS Image Advanced", "Enable the SECourses MOSS-Image controls: negative-branch layer skipping, attention backend, JSON layout drafts, {a|b} choices, layout boxes and prompt batches. Only applies to MOSS-Image models.",
             "false", IgnoreIf: "false", Group: group, FeatureFlag: Feature, OrderPriority: -20));
-        Mode = T2IParamTypes.Register<string>(new("MOSS Image Mode", "Text mode takes a plain prompt, tags or a complete JSON prompt (official compiled layouts and pixel drafts from the MOSS prompt enhancer both work). Layout boxes builds the JSON layout from the boxes below and uses the main prompt as the overall image caption.",
-            TextMode, GetValues: _ => [TextMode, LayoutMode], Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -10));
+        Mode = T2IParamTypes.Register<string>(new("MOSS Image Mode", "Text mode takes a plain prompt, tags or a complete JSON prompt (official compiled layouts and pixel drafts from the MOSS prompt enhancer both work). Layout boxes builds the JSON layout from the boxes below and uses the main prompt as the overall image caption. Image edit edits the images attached to the prompt with ChenkinLab's Moss-Image-Edit LoRA (added automatically): write the instruction and name several images as image 1, image 2.",
+            TextMode, GetValues: _ => [TextMode, LayoutMode, EditMode], Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -10));
+        EditReferenceSize = T2IParamTypes.Register<int>(new("MOSS Image Edit Reference Size", "Image edit mode: long side of each attached image in pixels (scaled down only, multiples of 16). The result has the first image's size, because the Moss-Image-Edit adapter lines the result up with image 1 token by token; another size loses its layout and identity. 512 is ChenkinLab's own setting; 1536 also worked in our tests.",
+            "1024", Min: 256, Max: 2048, Step: 16, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -9.5));
         SkipLayers = T2IParamTypes.Register<string>(new("MOSS Image Negative Skip Layers", "Zero-based DiT layers skipped in the negative (CFG) branch, the official two-pass skip-layer guidance. 22 is the official default; 24 and 26 also help. Comma separated, empty turns it off (more realistic but details may collapse). Needs CFG above 1.",
             "22", Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -8));
         SkipStart = T2IParamTypes.Register<double>(new("MOSS Image Skip Start", "Fraction of sampling at which negative-branch skipping starts. Official default 0.",
@@ -86,10 +99,14 @@ public class MossImageExtension : Extension
             {
                 throw new SwarmUserErrorException(error.ToString());
             }
+            ApplyEditSize(input);
         });
         // After LoRAs (-10) and the native sigma shift, so the skip window shares the model's own schedule.
         WorkflowGenerator.AddModelGenStep(ApplyModelPatches, -3.2);
         WorkflowGenerator.AddStep(AddLayout, -6.9);
+        // After the model loads (-15), before the native positive (-8) and negative (-7) encoders; restored before the final save step (10).
+        WorkflowGenerator.AddStep(HoldPromptImages, -8.5);
+        WorkflowGenerator.AddStep(RestorePromptImages, 9.9);
         ScriptFiles.Add("Assets/moss_image.js");
         StyleSheetFiles.Add("Assets/moss_image.css");
     }
@@ -138,6 +155,7 @@ public class MossImageExtension : Extension
             input.Remove(ScoreRescaling);
             input.Remove(Boxes);
             input.Remove(PromptList);
+            input.Remove(EditReferenceSize);
             input.RequiredFlags.Remove(Feature);
             return;
         }
@@ -148,13 +166,26 @@ public class MossImageExtension : Extension
         }
         int width = input.GetImageWidth(), height = input.GetImageHeight();
         string prompt = input.Get(T2IParamTypes.Prompt, "");
-        if (input.Get(Mode, TextMode) == LayoutMode)
+        string mode = input.Get(Mode, TextMode);
+        if (mode == LayoutMode)
         {
             ReadBoxes(input.Get(Boxes, "[]"));
             if (ParseJsonObject(prompt) is not null)
             {
                 throw new SwarmUserErrorException("Layout boxes mode builds the JSON layout itself. Put only the overall image caption in the prompt, or switch MOSS Image Mode to Text / JSON prompt to use your own JSON layout.");
             }
+        }
+        else if (mode == EditMode)
+        {
+            if (!input.TryGet(T2IParamTypes.PromptImages, out List<Image> images) || images.Count == 0)
+            {
+                throw new SwarmUserErrorException("MOSS Image edit mode needs the image to edit: drag it into the prompt box (up to 4 images; image 1 is edited and sets the result size).");
+            }
+            if (images.Any(image => image.Type.MetaType != MediaMetaType.Image))
+            {
+                throw new SwarmUserErrorException("MOSS Image edit mode takes still images. Remove video or audio attachments.");
+            }
+            prompt = ImageLabel.Replace(prompt, match => $"image {(match.Groups[1].Success ? match.Groups[1].Value : match.Groups[2].Value)}");
         }
         input.Set(T2IParamTypes.Prompt, PreparePrompt(prompt, width, height));
         input.Set(T2IParamTypes.NegativePrompt, PreparePrompt(input.Get(T2IParamTypes.NegativePrompt, ""), width, height));
@@ -363,6 +394,10 @@ public class MossImageExtension : Extension
         {
             ApplyDeBand(g);
         }
+        if (g.UserInput.Get(Mode, TextMode) == EditMode)
+        {
+            ApplyEdit(g);
+        }
         double rescaling = g.UserInput.Get(ScoreRescaling, 1);
         if (Math.Abs(rescaling - 1) > 1e-6)
         {
@@ -416,6 +451,88 @@ public class MossImageExtension : Extension
             ["strength_model"] = 1.0
         });
         g.LoadingModel = [node, 0];
+    }
+
+    /// <summary>ChenkinLab's Moss-Image-Edit: its LoRA plus the reference branch of the SECoursesAudioTools node, which runs the
+    /// attached images through the model at timestep 0 and lets the result attend to them in every block.</summary>
+    private static void ApplyEdit(WorkflowGenerator g)
+    {
+        if (!g.Features.Contains(EditFeature))
+        {
+            throw new SwarmUserErrorException("MOSS Image edit mode needs the updated SECoursesAudioTools nodes in the ComfyUI backend. Run the SwarmUI updater, then restart the backend.");
+        }
+        if (!Program.T2IModelSets.TryGetValue("LoRA", out T2IModelHandler loras) || !loras.Models.TryGetValue(EditLora, out T2IModel lora))
+        {
+            throw new SwarmUserErrorException($"MOSS Image edit mode needs {EditLora} in your LoRA folder. Download the MOSS-Image Core Bundle with the SECourses model downloader.");
+        }
+        string loraNode = g.CreateNode("LoraLoaderModelOnly", new JObject()
+        {
+            ["model"] = g.LoadingModel,
+            ["lora_name"] = lora.ToString(g.ModelFolderFormat),
+            ["strength_model"] = 1.0
+        });
+        List<Image> images = HeldPromptImages.TryGetValue(g.UserInput, out List<Image> held) ? held : g.UserInput.Get(T2IParamTypes.PromptImages);
+        string inputs = g.CreateNode("SEFibo2SwarmInputs", new JObject()
+        {
+            ["prompt"] = "",
+            ["references_json"] = new JArray(images.Select(image => image.AsBase64)).ToString(Formatting.None),
+            ["init_base64"] = "",
+            ["mask_base64"] = ""
+        });
+        string edit = g.CreateNode("SEMossImageEditReferences", new JObject()
+        {
+            ["model"] = WorkflowGenerator.NodePath(loraNode, 0),
+            ["vae"] = g.LoadingVAE,
+            ["references"] = WorkflowGenerator.NodePath(inputs, 0),
+            ["reference_max_edge"] = g.UserInput.Get(EditReferenceSize, 1024),
+            ["width"] = g.UserInput.GetImageWidth(),
+            ["height"] = g.UserInput.GetImageHeight()
+        });
+        g.LoadingModel = [edit, 0];
+    }
+
+    /// <summary>The result of an edit has image 1's reference size (ApplyEditSize sets Width / Height to it after the Megapixels extension).</summary>
+    public static (int, int) ReferenceSize(int width, int height, int maxEdge)
+    {
+        int limit = maxEdge / 16 * 16;
+        double scale = Math.Min(1.0, (double)limit / Math.Max(width, height));
+        int Side(int value) => Math.Min(limit, Math.Max(16, (int)(value * scale / 16 + 0.5) * 16));
+        return (Side(width), Side(height));
+    }
+
+    private static void ApplyEditSize(T2IParamInput input)
+    {
+        if (!input.Get(Enabled, false) || input.Get(Mode, TextMode) != EditMode || !IsMoss(input.Get(T2IParamTypes.Model))
+            || !input.TryGet(T2IParamTypes.PromptImages, out List<Image> images) || images.Count == 0)
+        {
+            return;
+        }
+        (int imageWidth, int imageHeight) = images[0].GetResolution();
+        (int width, int height) = ReferenceSize(imageWidth, imageHeight, input.Get(EditReferenceSize, 1024));
+        input.Set(T2IParamTypes.Width, width);
+        input.Set(T2IParamTypes.Height, height);
+        input.Remove(T2IParamTypes.SideLength);
+        input.Remove(T2IParamTypes.AltResolutionHeightMult);
+        input.Remove(T2IParamTypes.RawResolution);
+    }
+
+    /// <summary>MOSS-Image reads text only: Swarm's encoder would show attached images to Qwen3.5. The reference branch already has them.</summary>
+    private static void HoldPromptImages(WorkflowGenerator g)
+    {
+        if (Active(g) && g.UserInput.Get(Mode, TextMode) == EditMode && g.UserInput.TryGet(T2IParamTypes.PromptImages, out List<Image> images))
+        {
+            HeldPromptImages.AddOrUpdate(g.UserInput, images);
+            g.UserInput.Remove(T2IParamTypes.PromptImages);
+        }
+    }
+
+    private static void RestorePromptImages(WorkflowGenerator g)
+    {
+        if (HeldPromptImages.TryGetValue(g.UserInput, out List<Image> images))
+        {
+            g.UserInput.Set(T2IParamTypes.PromptImages, images);
+            HeldPromptImages.Remove(g.UserInput);
+        }
     }
 
     private static void AddLayout(WorkflowGenerator g)
