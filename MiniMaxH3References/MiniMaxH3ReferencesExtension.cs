@@ -85,6 +85,9 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     /// <summary>Tested default YOLO face model of the face pass (the same default as the SECourses ComfyUI presets).</summary>
     public const string DefaultFaceDetector = "yolov9e-face-lindevs.pt";
 
+    /// <summary>SwarmUI's automatic MiniMax H3 text encoder, and the INT8 ConvRot one the FastH3 Omni Core Bundle installs.</summary>
+    public const string NvFp4TextEncoder = "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors", Int8TextEncoder = "qwen3vl_32b_minimax_h3_int8_convrot.safetensors";
+
     /// <summary>Identity-preserving detail clause appended to the face-pass prompt (same text as the ComfyUI presets).</summary>
     public const string FaceRefinementPrompt = "Preserve the exact same identity, expression, head pose, and facial proportions. Resolve natural coherent eyes, skin texture, beard strands, and hair detail. No identity change, beautification, or facial reshaping.";
 
@@ -94,7 +97,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.20.0";
+        Version = "1.21.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -130,6 +133,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         RegisterMouthPassParameters();
         RegisterInitAudioParameters();
         RegisterRefModParameters();
+        T2IParamInput.SpecialParameterHandlers.Add(PreferInstalledTextEncoder);
         // Audio-only H3 intentionally uses a 32px disposable video stream and
         // supports the native H3 frame range beyond SwarmUI's generic video cap.
         // Provide those relaxed types only while Audio Only is enabled, and parse
@@ -219,8 +223,8 @@ public partial class MiniMaxH3ReferencesExtension : Extension
             DependNonDefault: SpeedOptimize.Type.ID));
         SpeedSparseAttention = T2IParamTypes.Register<string>(new(
             "MiniMax H3 Speed Sparse Attention",
-            "Native ComfyUI SOL sparse attention mode for the MiniMax H3 Optimizations parameter.\n'auto' benchmarks against your current attention backend on this GPU and keeps whichever is faster (recommended). 'enabled' forces it, 'disabled' turns it off.",
-            "auto", GetValues: _ => ["auto", "enabled", "disabled"], IsAdvanced: true,
+            "Native ComfyUI sparse attention mode for the MiniMax H3 Optimizations parameter.\n'auto' benchmarks SOL against your current attention backend on this GPU and keeps whichever is faster (recommended for MiniMax H3). 'enabled' forces SOL, 'disabled' turns it off.\n'vsa' runs the Video Sparse Attention FastH3 models (FastH3 Omni) were trained with, on every step: the fastest choice for them (about 1.4x for 5 s and 1.9x for 10 s at 1344x768 on an RTX 5090). Use it with First Block Cache off; models without its learned branch stay dense.",
+            "auto", GetValues: _ => ["auto", "enabled", "disabled", "vsa"], IsAdvanced: true,
             FeatureFlag: SpeedFeatureId, Group: T2IParamTypes.GroupAdvancedSampling, OrderPriority: 16.5));
         VideoSigmaShift = T2IParamTypes.Register<double>(new(
             "MiniMax H3 Video Shift",
@@ -472,6 +476,22 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     private static bool IsMiniMaxH3Model(T2IModel model)
     {
         return model?.ModelClass?.CompatClass?.ID == T2IModelClassSorter.CompatMiniMaxH3.ID;
+    }
+
+    /// <summary>SwarmUI loads (and downloads when missing) its NVFP4 Qwen3-VL 32B for every MiniMax H3 model. When only the INT8 ConvRot
+    /// encoder is installed, as after the FastH3 Omni Core Bundle, use that file instead of downloading a second 15.7 GB encoder.</summary>
+    private static void PreferInstalledTextEncoder(T2IParamInput input)
+    {
+        bool h3 = IsMiniMaxH3Model(input.Get(T2IParamTypes.Model, null))
+            || (input.TryGet(T2IParamTypes.VideoModel, out T2IModel videoModel) && IsMiniMaxH3Model(videoModel));
+        if (!h3 || input.TryGet(T2IParamTypes.QwenModel, out _) || !Program.T2IModelSets.TryGetValue("Clip", out T2IModelHandler clips))
+        {
+            return;
+        }
+        if (!clips.Models.ContainsKey(NvFp4TextEncoder) && clips.Models.TryGetValue(Int8TextEncoder, out T2IModel int8))
+        {
+            input.Set(T2IParamTypes.QwenModel, int8);
+        }
     }
 
     /// <summary>Base generation: condition a MiniMax H3 text / reference generation on the init audio (the Image To Video pass has its own hook).</summary>
@@ -965,6 +985,13 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         }
         if (matched == 0)
         {
+            string modelName = g.UserInput.Get(T2IParamTypes.Model, null)?.Name ?? "";
+            // FastH3 Omni is one Ref2VA model for text-only and reference prompts alike: there is nothing to route.
+            if (Regex.IsMatch(modelName, "fasth3|omniref", RegexOptions.IgnoreCase))
+            {
+                Logs.Debug($"MiniMax H3 Audio Only keeps {modelName} for {(hasReferences ? "reference" : "text-only")} conditioning.");
+                return;
+            }
             Logs.Warning("MiniMax H3 Audio Only could not identify an FL2VA/Ref2VA model filename for automatic routing.");
             return;
         }

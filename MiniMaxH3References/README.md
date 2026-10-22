@@ -3,6 +3,23 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## FastH3 Omni and VSA (1.21.0)
+
+FastH3 Omni (FastVideo and Nuva Lab) is MiniMax H3 Ref2VA distilled to 8 steps; SwarmUI detects it as a
+MiniMax H3 model, so every feature here works with it: references, Init Audio and Long Lip Sync, Audio
+Only, Video Face Inpainting and the Mouth Pass. Use 8 steps, CFG 1, Euler / simple and no turbo LoRA; the
+SECourses FastH3 Omni presets set this up.
+
+- **MiniMax H3 Speed Sparse Attention** has a new `vsa` choice: the Video Sparse Attention FastH3 models
+  were trained with, on every step and block, without the speed benchmark. Turn **MiniMax H3 Optimizations**
+  on, **First Block Cache** off and choose `vsa`. FastH3 Omni INT8 at 1344x768 on an RTX 5090: sampling about
+  1.4x faster for 5 s and 1.9x for 10 s, same quality in our tests. Models without the learned VSA branch
+  (plain MiniMax H3) stay dense. Needs ComfyUI-TeaCache `eb845c5` or newer.
+- SwarmUI loads and downloads its NVFP4 Qwen3-VL 32B for every MiniMax H3 model. When that file is missing
+  and `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` (FastH3 Omni Core Bundle) is installed, the extension
+  uses the INT8 ConvRot encoder instead of downloading another 15.7 GB file. A chosen Qwen Model always wins.
+- Audio Only keeps FastH3 Omni for text-only and reference prompts (no FL2VA routing, no warning).
+
 ## MiniMax H3 Mouth Pass (1.20.0)
 
 The new **MiniMax H3 Mouth Pass** group (closed by default, directly after Video Face Inpainting) restores
