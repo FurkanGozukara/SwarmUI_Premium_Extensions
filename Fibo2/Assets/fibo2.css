@@ -1,0 +1,9 @@
+.fibo2-batch { width: 100%; margin-top: .6rem; }
+.fibo2-help { font-size: .87rem; line-height: 1.4; opacity: .9; margin: .4rem 0 .7rem; }
+.fibo2-toolbar { display: flex; flex-wrap: wrap; gap: .35rem; margin: .65rem 0; }
+.fibo2-button { font-size: .8rem; padding: .3rem .5rem; }
+.fibo2-description { width: 100%; max-width: 100%; box-sizing: border-box; margin: .25rem 0; min-height: 4.5rem; resize: vertical; padding: .4rem; }
+.fibo2-prompt-row { border-top: 1px solid #71809666; padding: .6rem 0; }
+.fibo2-prompt-row strong { font-size: .85rem; overflow-wrap: anywhere; }
+.fibo2-batch-status { font-size: .86rem; line-height: 1.4; margin-top: .5rem; }
+.fibo2-batch [hidden] { display: none !important; }
