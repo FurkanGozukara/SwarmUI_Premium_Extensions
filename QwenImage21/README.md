@@ -50,10 +50,18 @@ native Qwen Image 2.1 support loads, so plain Qwen Image 2.1 generations and the
 unified presets share one copy. Version 1.0.2 (2026-10-23) changed the default from
 `qwen3vl_8b`: downloader versions before V184 saved the encoder under that name,
 which is SwarmUI's Ideogram 4 encoder, so SwarmUI downloaded another 9.35 GB copy
-for plain Qwen Image 2.1 generations. If an older downloader saved the Qwen Image 2.1
-Core Bundle's encoder as `qwen3vl_8b.safetensors` and Ideogram 4 does not use that
-file, rename it to `qwen3vl_8b_int8_convrot.safetensors`; otherwise download the
-bundle again.
+for plain Qwen Image 2.1 generations. Older downloaders saved every Qwen Image 2.1
+encoder, and Ideogram 4's, as `qwen3vl_8b.safetensors`; its size tells which one it is
+(a file SwarmUI has used is about 64 KB larger):
+
+- 9,350,798,360 bytes: the INT8 ConvRot encoder of the Core Bundle. Rename it to
+  `qwen3vl_8b_int8_convrot.safetensors`, or download the bundle again.
+- 17,534,334,616 bytes (BF16) or 6,312,105,364 bytes (W4A8): rename it to
+  `qwen3vl_8b_bf16.safetensors` or `qwen3vl_8b_w4a8.safetensors`.
+- 10,588,637,512 or 6,305,221,764 bytes: Ideogram 4's own FP8 or NVFP4 encoder; keep it.
+
+After a rename, Ideogram 4 gets its own encoder again from its core bundle or from
+SwarmUI's automatic download.
 
 The shared inference and mask implementation is documented in
 [SECoursesAudioTools](https://github.com/FurkanGozukara/SECoursesAudioTools/blob/master/docs/qwen_image21.md).
