@@ -23,7 +23,7 @@ public class QwenImage21Extension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Qwen Image 2.1 unified generation, reference editing, img2img, inpainting and RGBA.";
         License = "MIT";
-        Version = "1.0.1";
+        Version = "1.0.2";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/QwenImage21";
     }
 
@@ -42,7 +42,8 @@ public class QwenImage21Extension : Extension
         Denoise = T2IParamTypes.Register<double>(new("Qwen Unified Denoise", "Strength for img2img/inpaint. Lower retains more source detail; 1 allows full replacement. Independent of mask opacity. Generate/reference edit always uses 1.", "0.85", Min: 0.01, Max: 1, Step: 0.01, Group: group, DependNonDefault: Enabled.Type.ID));
         ReferenceSize = T2IParamTypes.Register<int>(new("Qwen Unified Reference Size", "Resize each init/reference to about this size squared, preserving aspect and rounding to 32 pixels. 1024 is about 1 MP; 2048 about 4 MP; 0 keeps original size rounded to 32. Text-only output uses main Width/Height.", "1024", Min: 0, Max: 4096, Step: 32, Group: group, DependNonDefault: Enabled.Type.ID));
         Transparent = T2IParamTypes.Register<bool>(new("Qwen Unified Transparent", "Request a transparent background with the official RGBA prompt wording. Describe an isolated subject. This is generation, not automatic background removal. Save PNG to retain alpha.", "false", Group: group, DependNonDefault: Enabled.Type.ID));
-        TextEncoder = T2IParamTypes.Register<T2IModel>(new("Qwen Unified Text Encoder", "Existing Qwen3-VL 8B text/vision encoder from the Qwen Image 2.1 Core Bundle.", "qwen3vl_8b", Subtype: "Clip", Group: group, DependNonDefault: Enabled.Type.ID));
+        // qwen3vl_8b_int8_convrot is also Swarm's own Qwen Image 2.1 default; qwen3vl_8b is its Ideogram 4 encoder name.
+        TextEncoder = T2IParamTypes.Register<T2IModel>(new("Qwen Unified Text Encoder", "Existing Qwen3-VL 8B text/vision encoder from the Qwen Image 2.1 Core Bundle (qwen3vl_8b_int8_convrot, the file SwarmUI uses for Qwen Image 2.1). The BF16 and W4A8 files keep their own names.", "qwen3vl_8b_int8_convrot", Subtype: "Clip", Group: group, DependNonDefault: Enabled.Type.ID));
         Vae = T2IParamTypes.Register<T2IModel>(new("Qwen Unified VAE", "Qwen Image 2.1 RGBA VAE. The older Qwen Image VAE is incompatible.", "QwenImage/qwen_image_2.1_vae_bf16", Subtype: "VAE", Group: group, DependNonDefault: Enabled.Type.ID));
         CacheDevice = Choice("Qwen Unified Cache Device", "Auto uses spare VRAM, then RAM. CPU stores the cache in RAM. Off recomputes references every step.", "auto", ["auto", "gpu", "cpu", "off"]);
         CacheDtype = Choice("Qwen Unified Cache Precision", "Default is lossless. Int8/int4 compress the reference cache and can change results.", "default", ["default", "int8", "int4"]);

@@ -45,6 +45,16 @@ must expose `TextEncodeQwenImage21` and `QwenImage21Cache`.
 Models come from the downloader's **Qwen Image 2.1 Core Bundle**; this extension
 does not download models. No ComfyUI or SwarmUI core code is changed.
 
+The text encoder is `qwen3vl_8b_int8_convrot.safetensors`, the same file SwarmUI's
+native Qwen Image 2.1 support loads, so plain Qwen Image 2.1 generations and the
+unified presets share one copy. Version 1.0.2 (2026-10-23) changed the default from
+`qwen3vl_8b`: downloader versions before V184 saved the encoder under that name,
+which is SwarmUI's Ideogram 4 encoder, so SwarmUI downloaded another 9.35 GB copy
+for plain Qwen Image 2.1 generations. If an older downloader saved the Qwen Image 2.1
+Core Bundle's encoder as `qwen3vl_8b.safetensors` and Ideogram 4 does not use that
+file, rename it to `qwen3vl_8b_int8_convrot.safetensors`; otherwise download the
+bundle again.
+
 The shared inference and mask implementation is documented in
 [SECoursesAudioTools](https://github.com/FurkanGozukara/SECoursesAudioTools/blob/master/docs/qwen_image21.md).
 
