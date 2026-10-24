@@ -1186,7 +1186,10 @@ public partial class MiniMaxH3ReferencesExtension : Extension
                 Logs.Info("MiniMax H3 Audio Only has no attachments; using text-only conditioning.");
                 return;
             }
-            throw new SwarmUserErrorException("MiniMax H3 References needs at least one Prompt Image, reference video, or reference audio file.");
+            // No references attached: generate from the prompt alone, exactly as with the group switched off,
+            // so the reference presets also work as text to video (their descriptions promise this).
+            Logs.Info("MiniMax H3 References has no attachments; generating from the prompt alone.");
+            return;
         }
         string prompt = TranslatePromptReferenceTokens(g.UserInput.Get(T2IParamTypes.Prompt, ""),
             images.Count, videos.Count, standaloneAudioCount, videos.Count + (hasLegacyAudio ? 1 : 0), audioOnly);
