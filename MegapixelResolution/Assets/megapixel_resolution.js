@@ -44,6 +44,7 @@ class MegapixelResolutionUI {
 
         let applying = false;
         let changingAspect = false;
+        let reusing = false;
 
         let disableMegapixels = () => {
             if (!applying && megapixelsToggle.checked) {
@@ -110,13 +111,45 @@ class MegapixelResolutionUI {
         });
 
         let manualResolutionChange = () => {
-            if (!applying && !changingAspect) {
+            if (!applying && !changingAspect && !reusing) {
                 disableMegapixels();
             }
         };
         for (let input of [width, height, sideLength, sideLengthToggle]) {
             input.addEventListener('input', manualResolutionChange, true);
             input.addEventListener('change', manualResolutionChange, true);
+        }
+
+        // Reuse Parameters writes every stored value back with change events, Width and Height after Megapixels. Those
+        // writes are not manual size edits: an image made with Megapixels gets Megapixels back, switched on, with the
+        // size it was made at.
+        if (typeof copy_current_image_params == 'function' && !copy_current_image_params.megapixelResolutionAware) {
+            let reuseParameters = copy_current_image_params;
+            let reuseWithMegapixels = function (...args) {
+                let stored = null;
+                try {
+                    stored = JSON.parse(interpretMetadata(currentMetadataVal)).sui_image_params?.megapixels;
+                }
+                catch (e) {
+                    stored = null;
+                }
+                reusing = true;
+                try {
+                    return reuseParameters.apply(this, args);
+                }
+                finally {
+                    reusing = false;
+                    if (stored !== undefined && stored !== null && stored !== '') {
+                        if (!megapixelsToggle.checked) {
+                            megapixelsToggle.checked = true;
+                            doToggleEnable(megapixels.id);
+                        }
+                        apply(true);
+                    }
+                }
+            };
+            reuseWithMegapixels.megapixelResolutionAware = true;
+            window.copy_current_image_params = reuseWithMegapixels;
         }
 
         megapixels.addEventListener('input', () => apply());

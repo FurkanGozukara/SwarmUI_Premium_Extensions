@@ -16,7 +16,7 @@ public class MegapixelResolutionExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a megapixel slider and live diagram for aspect-aware image resolutions.";
         License = "MIT";
-        Version = "1.1.0";
+        Version = "1.1.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/MegapixelResolution";
     }
 

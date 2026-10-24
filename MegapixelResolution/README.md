@@ -7,7 +7,8 @@ the width and height are selected automatically for the current aspect ratio.
 The control uses the selected model's resolution precision and shows the final
 rounded dimensions in SwarmUI's existing Resolution header. Adjusting Width,
 Height, or Side Length turns Megapixels off, so the most recently edited sizing
-mode always wins.
+mode always wins. Reuse Parameters on an image made with Megapixels switches it
+back on at the stored value, so the image's size comes back too.
 
 A responsive diagram below the controls shows the selected aspect, exact width,
 height, total pixel count, and actual rounded megapixel count. It updates one
