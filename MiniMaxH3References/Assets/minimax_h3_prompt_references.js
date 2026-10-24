@@ -1767,6 +1767,7 @@ if (typeof featureSetChangers != 'undefined') {
     featureSetChangers.push(() => minimaxH3SamplingShiftFeature());
     featureSetChangers.push(() => minimaxH3LongLipSyncFeature());
     featureSetChangers.push(() => minimaxH3MouthPassFeature());
+    featureSetChangers.push(() => minimaxH3NodeGatedFeature('minimax_h3_genjutsu'));
     // re-evaluate when the Image To Video model or group toggle changes (the core only re-evaluates on base model
     // changes); delegated so it also works when the parameter inputs are (re)built after this script loads
     document.addEventListener('change', (event) => {

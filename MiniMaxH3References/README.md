@@ -3,6 +3,34 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## MiniMax H3 Genjutsu (1.22.0)
+
+The new **MiniMax H3 Genjutsu** group replaces the person in a video with your character. Turn on MiniMax H3
+References, attach the clip beside the prompt as `@video1` (Add With Trim picks the part to use) and one image of
+the new character as `@image1`, leave the prompt empty and Generate. The result keeps the clip's motion, timing,
+camera, lip movements, length, aspect ratio and original soundtrack. The SECourses presets **MiniMax H3 Genjutsu -
+FastH3 Omni 8 Steps** and **MiniMax H3 Genjutsu - Ref2VA 20 Steps** set everything up.
+
+- SAM 3.1 (`sam3.1_multiplex_fp16.safetensors` in Models/Stable-Diffusion, MiniMax-H3 and FastH3 Omni Core
+  Bundles) finds **Genjutsu Target** (`person`, or eg `man in red:1`) in every frame and inverts only the
+  performer, so H3 copies the motion but not the identity or costume. **Genjutsu Motion Guide Megapixels** (0.15)
+  sets the guide's size; **Detection Threshold** and **Mask Grow** are advanced options.
+- **Genjutsu Auto Describe** (on): a local Qwen3-VL 8B (`qwen3vl_8b_int8_convrot.safetensors`, also Qwen Image
+  2.1's encoder) describes the character image and the clip, and the Genjutsu prompt names the new outfit, the
+  action, the setting, the lighting and the framing. Short notes typed in the prompt are added to the shot; a
+  complete MiniMax H3 prompt (with `subject_definitions:`) is used as written. **Genjutsu Spoken Words** gives
+  word-by-word lip sync. Without a description the performer's costume can carry over.
+- **Genjutsu Background**: `video (character replacement)` keeps the clip's location, lighting and framing;
+  `image (motion transfer)` keeps the character image's background and takes only the motion.
+- **Genjutsu Lock Clip Audio** (on) locks the clip's soundtrack into the H3 audio stream like Init Audio (closer
+  lip sync in our tests); the saved video carries the clip's own audio either way. A silent clip gets
+  generated ambience. **Genjutsu Match Clip Aspect** (on) keeps your Width x Height area with the clip's aspect.
+- The output length is the clip's (24 FPS, 17k+5 frames); Text2Video Frames, Init Image and Init Audio are not
+  used. Video Face Inpainting and the Mouth Pass follow the Genjutsu length and prompt.
+- The backend nodes are `SECoursesH3GenjutsuMotionGuide` and `SECoursesH3GenjutsuPrompt` from
+  [FurkanGozukara/FoleyExtension](https://github.com/FurkanGozukara/FoleyExtension); the group appears only when
+  the backend has them and a MiniMax H3 model is selected.
+
 ## FastH3 Omni and VSA (1.21.0)
 
 FastH3 Omni (FastVideo and Nuva Lab) is MiniMax H3 Ref2VA distilled to 8 steps; SwarmUI detects it as a
