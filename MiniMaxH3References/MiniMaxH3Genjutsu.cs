@@ -29,6 +29,7 @@ public partial class MiniMaxH3ReferencesExtension
     private sealed class GenjutsuState
     {
         public string Guide, AudioLock;
+        public bool SoundtrackLogged;
     }
 
     private static readonly ConditionalWeakTable<WorkflowGenerator, GenjutsuState> GenjutsuStates = new();
@@ -116,6 +117,30 @@ public partial class MiniMaxH3ReferencesExtension
         inputs["length"] = WorkflowGenerator.NodePath(guide, 2);
         inputs["width"] = WorkflowGenerator.NodePath(guide, 3);
         inputs["height"] = WorkflowGenerator.NodePath(guide, 4);
+        // The base sampler runs on the empty audio/video latent the core made at -9 from Text2Video Frames and Width x Height. Size it
+        // like the guide too, or H3 samples 124 frames at the base size (a portrait clip came out landscape, a 4.5 s clip 5.2 s long).
+        int sized = 0;
+        foreach (string nodeClass in new[] { "EmptyMiniMaxH3LatentAV", "SwarmEmptyMiniMaxH3LatentAV" })
+        {
+            g.RunOnNodesOfClass(nodeClass, (_, node) =>
+            {
+                if (node["inputs"] is JObject latentInputs)
+                {
+                    latentInputs["length"] = WorkflowGenerator.NodePath(guide, 2);
+                    latentInputs["width"] = WorkflowGenerator.NodePath(guide, 3);
+                    latentInputs["height"] = WorkflowGenerator.NodePath(guide, 4);
+                    sized++;
+                }
+            });
+        }
+        if (sized == 0)
+        {
+            throw new SwarmReadableErrorException("MiniMax H3 Genjutsu could not find the MiniMax H3 audio/video latent to size it like the clip.");
+        }
+        if (g.CurrentMedia is not null)
+        {
+            g.CurrentMedia.Frames = null; // the frame count now comes from the clip on the backend
+        }
         JObject promptInputs = new()
         {
             ["prompt"] = inputs["prompt"],
@@ -204,8 +229,9 @@ public partial class MiniMaxH3ReferencesExtension
             inputs["audio"] = WorkflowGenerator.NodePath(fallback, 0);
             replaced++;
         });
-        if (replaced > 0)
+        if (replaced > 0 && !state.SoundtrackLogged)
         {
+            state.SoundtrackLogged = true; // the final save (100) rebuilds the save node, so this runs twice
             Logs.Info($"MiniMax H3 Genjutsu: {replaced} output video(s) carry the clip's own soundtrack.");
         }
     }

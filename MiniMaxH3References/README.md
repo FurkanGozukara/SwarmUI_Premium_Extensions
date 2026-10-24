@@ -3,7 +3,12 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
-## MiniMax H3 Genjutsu (1.22.0)
+## MiniMax H3 Genjutsu (1.22.0, fixed in 1.22.1)
+
+1.22.1: the base sampler's audio/video latent now takes the clip's length and the guide's size. In 1.22.0 it kept
+Text2Video Frames (124) and the base Width x Height, so a trimmed 4.5 s clip gave a 5.2 s video and a portrait clip
+came out landscape. The token meter beside the prompt also follows Genjutsu now (the clip's length and aspect, the
+motion guide as @video1, the Genjutsu template's text) instead of showing 124 frames at Width x Height.
 
 The new **MiniMax H3 Genjutsu** group replaces the person in a video with your character. Turn on MiniMax H3
 References, attach the clip beside the prompt as `@video1` (Add With Trim picks the part to use) and one image of

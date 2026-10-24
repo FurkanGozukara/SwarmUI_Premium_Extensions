@@ -219,6 +219,41 @@ class PromptTokenMeter {
     }
 }
 
+/** Text tokens the Genjutsu template, the Auto Describe fields and the background rules add to a prompt that is not a complete
+ * H3 prompt: 847 on the shadowboxing example (video background, Auto Describe), as in FoleyExtension's secourses_token_graph.mjs. */
+const GENJUTSU_TEMPLATE_TOKENS = 850;
+
+/**
+ * MiniMax H3 Genjutsu (MiniMaxH3Genjutsu.cs, FoleyExtension SECoursesH3GenjutsuMotionGuide): @video1 becomes the inverted motion
+ * guide (Genjutsu Motion Guide Megapixels of the decoded clip), the output takes the clip's usable length at 24 FPS (17k + 5, trim
+ * window and Reference Max Seconds included) and, with Genjutsu Match Clip Aspect, the clip's aspect ratio at the Width x Height
+ * area. Edits `spec` in place; returns true when the clip's size or length is unknown (the estimate is then approximate).
+ */
+function applyGenjutsuToSpec(H3, spec, ctx) {
+    if (!/subject[ _]definitions[\s*_`]*:/i.test(spec.prompt || '')) {
+        spec.textTokens = H3.textTokens(spec.prompt) + GENJUTSU_TEMPLATE_TOKENS;
+    }
+    let clip = spec.refVideos[0];
+    if (!(clip.width > 0 && clip.height > 0) || (clip.duration == null && clip.trimEnd == null)) {
+        return true;
+    }
+    let count = H3.pyRound(H3.trimWindow(clip, spec.maxSeconds).seconds * H3.FPS);
+    let length = count >= 5 ? count - ((count - 5) % 17) : 5;
+    if (ctx.param('genjutsumatchclipaspect') !== false) {
+        let area = spec.width * spec.height, ratio = clip.width / clip.height, grid = H3.CANVAS_MULTIPLE;
+        spec.width = Math.max(grid, H3.pyRound(Math.sqrt(area * ratio) / grid) * grid);
+        spec.height = Math.max(grid, H3.pyRound(Math.sqrt(area / ratio) / grid) * grid);
+    }
+    let megapixels = Number(ctx.param('genjutsumotionguidemegapixels')) || 0.15;
+    let scale = Math.sqrt((megapixels * 1024 * 1024) / (clip.width * clip.height));
+    spec.frames = length;
+    spec.refVideos[0] = {
+        ...clip, width: Math.max(1, H3.pyRound(clip.width * scale)), height: Math.max(1, H3.pyRound(clip.height * scale)),
+        duration: length / H3.FPS, trimStart: null, trimEnd: null,
+    };
+    return false;
+}
+
 /**
  * Model estimators. Each entry: { id, matches(compatClass) -> bool, estimate(ctx) -> Promise<{estimate, label, lines} | null> }.
  * `ctx` = { stage: 'base' | 'video', compat, prompt, param(id), promptImages, referenceCards(type), probe(elem, kind, src), modelData(name) }.
@@ -317,6 +352,10 @@ PromptTokenEstimators.push({
             }
             let hasRefs = spec.refImages.length + spec.refVideos.length + spec.refAudios.length > 0;
             label = audioOnly ? (hasRefs ? 'audio only with references' : 'audio only') : hasRefs ? 'reference to video' : 'text to video';
+            if (referencesEnabled && !audioOnly && ctx.param('minimaxhgenjutsu') === true && spec.refVideos.length > 0) {
+                approximate = applyGenjutsuToSpec(H3, spec, ctx) || approximate;
+                label = 'Genjutsu character swap';
+            }
         }
         if (initAudioData) {
             spec.audioGuide = true;
