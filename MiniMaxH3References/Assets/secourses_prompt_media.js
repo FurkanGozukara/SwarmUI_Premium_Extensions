@@ -61,9 +61,13 @@ function secoursesReadFileAsDataUrl(file) {
 
 /** Trims a video (data URL or server media path) on the server into inputs/edited_video; resolves to the saved input
  * path. SwarmUI renamed its video editor API from EditVideo (a `video` field) to EditMedia (a `media` field) on
- * September 16, 2026, so EditMedia comes first and an older build that does not know it gets EditVideo. */
+ * September 16, 2026, so EditMedia comes first and an older build that does not know it gets EditVideo. The server names
+ * the result '<filename>-edited-<n>' after cleaning the name to letters, digits, '-' and '_', so the name goes without
+ * its extension and without an earlier '-edited-<n>': cold_open.mp4 gives cold_open-edited-1, not cold_openmp4-edited-1,
+ * and trimming that card again gives cold_open-edited-2. */
 function secoursesTrimVideoOnServer(data, filename, startMilliseconds, endMilliseconds) {
-    let fields = { filename: filename, startMilliseconds: startMilliseconds, endMilliseconds: endMilliseconds };
+    let stem = `${filename || ''}`.replace(/\.[^./\\]+$/, '').replace(/-edited-\d+$/, '') || 'video';
+    let fields = { filename: stem, startMilliseconds: startMilliseconds, endMilliseconds: endMilliseconds };
     let call = (route, request) => new Promise((resolve, reject) => {
         genericRequest(route, request, (result) => resolve(result.result), 0, (error) => reject(new Error(`${error}`)));
     });
