@@ -35,7 +35,7 @@ public class FluxThreeKleinExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "FLUX.3 Klein advanced prompting, image references, visual layout boxes and prompt batches, using SwarmUI's native ComfyUI workflow.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.0.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/FluxThreeKlein";
     }
 
@@ -74,15 +74,18 @@ public class FluxThreeKleinExtension : Extension
         StyleSheetFiles.Add("Assets/flux_three_klein.css");
     }
 
+    /// <summary>SwarmUI names the native FLUX.3 Klein family 'flux-3-image-klein' (model class and compat class) and remaps the
+    /// former 'flux.3-klein' model class to it; cores before that rename used the compat class 'flux-3-klein'.</summary>
     private static bool IsFluxThree(T2IModel model)
     {
         if (model?.ModelClass is not null)
         {
-            return model.ModelClass.CompatClass?.ID == "flux-3-klein";
+            return model.ModelClass.CompatClass?.ID is "flux-3-image-klein" or "flux-3-klein";
         }
         return model is not null && File.Exists(model.RawFilePath)
             && Path.GetExtension(model.RawFilePath) is ".safetensors" or ".sft"
-            && T2IModelClassSorter.ModelClasses.TryGetValue("flux.3-klein", out T2IModelClass cls)
+            && (T2IModelClassSorter.ModelClasses.TryGetValue("flux-3-image-klein", out T2IModelClass cls)
+                || T2IModelClassSorter.ModelClasses.TryGetValue("flux.3-klein", out cls))
             && cls.IsThisModelOfClass(model, T2IModel.GetMetadataHeaderFrom(model.RawFilePath));
     }
 

@@ -9,6 +9,12 @@ genericRequest = function(url, data, ...args) {
     return fluxThreeNativeRequest(url, data, ...args);
 };
 
+/** Whether a compat class is the native FLUX.3 Klein family: 'flux-3-image-klein' in current SwarmUI cores, 'flux-3-klein'
+ * in cores before that rename. */
+function isFluxThreeKleinCompat(compatClass) {
+    return compatClass == 'flux-3-image-klein' || compatClass == 'flux-3-klein';
+}
+
 /** Keep the extension's controls scoped to the native FLUX.3 model family. */
 let fluxThreeFeatureSeen = false;
 featureSetChangers.push(() => {
@@ -17,7 +23,7 @@ featureSetChangers.push(() => {
     if (!fluxThreeFeatureSeen) {
         return [[], []];
     }
-    return currentModelHelper?.curCompatClass == 'flux-3-klein' ? [[flag], []] : [[], [flag]];
+    return isFluxThreeKleinCompat(currentModelHelper?.curCompatClass) ? [[flag], []] : [[], [flag]];
 });
 
 /** A visual editor for the native FLUX.3 layout table plus sequential prompt batches. */
@@ -163,7 +169,7 @@ class FluxThreeKleinUI {
     updateMode() {
         if (this.boxWrap && this.mode) {
             let enabled = document.getElementById('input_fluxkleinadvanced')?.checked;
-            if (!enabled || this.mode.value != 'Layout / optional references' || currentModelHelper?.curCompatClass != 'flux-3-klein') {
+            if (!enabled || this.mode.value != 'Layout / optional references' || !isFluxThreeKleinCompat(currentModelHelper?.curCompatClass)) {
                 this.boxWrap.style.display = 'none';
             }
             else {
@@ -490,7 +496,7 @@ class FluxThreeKleinUI {
         }
         let captured = getGenInput();
         let prompts = [captured.prompt || '', ...this.prompts.map(p => p.text)].filter(p => p.trim());
-        if (!captured.fluxkleinadvanced || currentModelHelper?.curCompatClass != 'flux-3-klein' || !prompts.length || prompts.length > 64) {
+        if (!captured.fluxkleinadvanced || !isFluxThreeKleinCompat(currentModelHelper?.curCompatClass) || !prompts.length || prompts.length > 64) {
             this.batchStatus.textContent = 'Select a FLUX.3 preset and enter between 1 and 64 prompts.';
             return;
         }

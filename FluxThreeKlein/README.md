@@ -85,7 +85,9 @@ Text generation, scene-preserving editing, two-reference selection, visual layou
 advanced prompting, sequential prompt batches, file/folder import, stop-after-current
 and PNG import/export passed. Twenty-three workflow/API checks cover limits,
 reference numbering, duplicate images, native JSON, sizing and model-family gating.
-Fixed-seed repetition produced identical pixels. The BF16 option and actual
+Fixed-seed repetition produced identical pixels. Version 1.0.1 also recognizes the model family under
+SwarmUI's current class name, `flux-3-image-klein` (the core remaps the former `flux.3-klein`); with 1.0.0 the
+FLUX.3 Klein group stayed hidden on those cores. The BF16 option and actual
 FLUX.3 LoRA weights were not separately generated in this validation; they use
 Swarm's native model and LoRA path.
 
