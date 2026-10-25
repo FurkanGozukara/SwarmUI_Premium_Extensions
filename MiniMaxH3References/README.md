@@ -3,6 +3,13 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Video trim (fixed in 1.22.2)
+
+1.22.2: Add With Trim and the scissors on an attached video card trim the video on the server again. SwarmUI
+renamed its video editor API from EditVideo to EditMedia on September 16, 2026, so on current SwarmUI both
+stopped with "Failed: Unknown API route". The uploader now calls EditMedia and falls back to EditVideo on older
+SwarmUI builds. Audio trimming, which runs in the browser, was not affected.
+
 ## MiniMax H3 Genjutsu (1.22.0, fixed in 1.22.1)
 
 1.22.1: the base sampler's audio/video latent now takes the clip's length and the guide's size. In 1.22.0 it kept

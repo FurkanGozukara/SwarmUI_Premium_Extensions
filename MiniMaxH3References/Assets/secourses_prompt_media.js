@@ -59,6 +59,22 @@ function secoursesReadFileAsDataUrl(file) {
     });
 }
 
+/** Trims a video (data URL or server media path) on the server into inputs/edited_video; resolves to the saved input
+ * path. SwarmUI renamed its video editor API from EditVideo (a `video` field) to EditMedia (a `media` field) on
+ * September 16, 2026, so EditMedia comes first and an older build that does not know it gets EditVideo. */
+function secoursesTrimVideoOnServer(data, filename, startMilliseconds, endMilliseconds) {
+    let fields = { filename: filename, startMilliseconds: startMilliseconds, endMilliseconds: endMilliseconds };
+    let call = (route, request) => new Promise((resolve, reject) => {
+        genericRequest(route, request, (result) => resolve(result.result), 0, (error) => reject(new Error(`${error}`)));
+    });
+    return call('EditMedia', { media: data, ...fields }).catch((error) => {
+        if (!`${error?.message || error}`.includes('Unknown API route')) {
+            throw error;
+        }
+        return call('EditVideo', { video: data, ...fields });
+    });
+}
+
 /** "0:07" / "1:23" clock text for player positions. */
 function secoursesFormatClock(seconds) {
     if (!Number.isFinite(seconds) || seconds < 0) {
@@ -1311,21 +1327,11 @@ class SECoursesPromptMedia {
             popup.setNote('Uploading and trimming the video on the server…');
             let data = await secoursesReadFileAsDataUrl(popup.file);
             let endMilliseconds = Math.abs(popup.end - popup.duration) < 0.001 ? -1 : Math.round(popup.end * 1000);
-            let request = {
-                video: data,
-                filename: popup.file.name,
-                startMilliseconds: Math.round(popup.start * 1000),
-                endMilliseconds: endMilliseconds,
-            };
-            await new Promise((resolve, reject) => {
-                genericRequest('EditVideo', request, (result) => {
-                    imagePromptAddImageData(`${getImageOutPrefix()}/${result.result}`, 'video', result.result, result.result);
-                    if (typeof inputBrowserHelper !== 'undefined' && inputBrowserHelper.inputImageBrowser) {
-                        inputBrowserHelper.inputImageBrowser.lightRefresh();
-                    }
-                    resolve();
-                }, 0, (error) => reject(new Error(`${error}`)));
-            });
+            let path = await secoursesTrimVideoOnServer(data, popup.file.name, Math.round(popup.start * 1000), endMilliseconds);
+            imagePromptAddImageData(`${getImageOutPrefix()}/${path}`, 'video', path, path);
+            if (typeof inputBrowserHelper !== 'undefined' && inputBrowserHelper.inputImageBrowser) {
+                inputBrowserHelper.inputImageBrowser.lightRefresh();
+            }
             popup.close();
         }
         catch (error) {
@@ -1354,7 +1360,7 @@ class SECoursesPromptMedia {
     }
 
     /** Replaces the card's media with the trimmed window: audio is re-sliced to a WAV in the browser, video is trimmed on
-     * the server (EditVideo into inputs/edited_video). The core's replace-in-place path keeps the card's order. */
+     * the server (SwarmUI's EditMedia into inputs/edited_video). The core's replace-in-place path keeps the card's order. */
     async confirmCardTrim(popup, card) {
         popup.setBusy(true);
         try {
@@ -1381,21 +1387,11 @@ class SECoursesPromptMedia {
                 else {
                     popup.setNote('Trimming the video on the server…');
                     let endMilliseconds = Math.abs(popup.end - popup.duration) < 0.001 ? -1 : Math.round(popup.end * 1000);
-                    let request = {
-                        video: media.dataset.filedata,
-                        filename: baseName,
-                        startMilliseconds: Math.round(popup.start * 1000),
-                        endMilliseconds: endMilliseconds,
-                    };
-                    await new Promise((resolve, reject) => {
-                        genericRequest('EditVideo', request, (result) => {
-                            imagePromptAddImageData(`${getImageOutPrefix()}/${result.result}`, 'video', result.result, result.result, card);
-                            if (typeof inputBrowserHelper !== 'undefined' && inputBrowserHelper.inputImageBrowser) {
-                                inputBrowserHelper.inputImageBrowser.lightRefresh();
-                            }
-                            resolve();
-                        }, 0, (error) => reject(new Error(`${error}`)));
-                    });
+                    let path = await secoursesTrimVideoOnServer(media.dataset.filedata, baseName, Math.round(popup.start * 1000), endMilliseconds);
+                    imagePromptAddImageData(`${getImageOutPrefix()}/${path}`, 'video', path, path, card);
+                    if (typeof inputBrowserHelper !== 'undefined' && inputBrowserHelper.inputImageBrowser) {
+                        inputBrowserHelper.inputImageBrowser.lightRefresh();
+                    }
                 }
             }
             catch (error) {
