@@ -3,6 +3,13 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Dragging from History (fixed in 1.22.4)
+
+A video or image dragged from SwarmUI's History onto the prompt is attached as itself again: a video becomes
+`@video1` with its motion and soundtrack, an image keeps its full size. Before 1.22.4 the uploader took the small
+preview picture Chrome attaches to the drag, so a History video arrived as a still `@image1` and an image as its
+thumbnail. Files dropped from Explorer are handled as before.
+
 ## Video trim (fixed in 1.22.2 and 1.22.3)
 
 1.22.2: Add With Trim and the scissors on an attached video card trim the video on the server again. SwarmUI

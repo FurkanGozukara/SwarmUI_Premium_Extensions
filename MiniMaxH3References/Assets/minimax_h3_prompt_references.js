@@ -696,6 +696,14 @@ class MiniMaxH3PromptReferences {
             }
         }, true);
         this.region.addEventListener('drop', async (event) => {
+            // A card dragged from SwarmUI's History or input browser carries its media path, and Chrome also attaches
+            // the card's preview picture as a file. SwarmUI's own drop handler adds the real media from that path (a
+            // video stays a video, an image keeps its full size), so such a drop is left to it.
+            let mediaPath = typeof swarmMediaPathDataType == 'string' ? event.dataTransfer?.getData(swarmMediaPathDataType) : '';
+            if (mediaPath && typeof isValidMediaPath == 'function' && isValidMediaPath(mediaPath)) {
+                this.region.classList.remove('minimax-h3-prompt-reference-dragging');
+                return;
+            }
             let files = this.supportedFiles(event.dataTransfer?.files);
             if (!this.isActive() || !files.length) {
                 return;
