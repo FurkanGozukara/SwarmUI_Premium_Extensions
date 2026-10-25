@@ -158,7 +158,7 @@ class FluxThreeKleinUI {
         });
         this.mode.addEventListener('change', () => this.updateMode());
         for (let id of ['width', 'height', 'aspectratio', 'megapixels', 'sidelength']) {
-            document.getElementById(`input_${id}`)?.addEventListener('change', () => this.render());
+            document.getElementById(`input_${id}`)?.addEventListener('change', () => this.renderSoon());
         }
         this.installPointer();
         this.installBatch();
@@ -236,12 +236,23 @@ class FluxThreeKleinUI {
         this.saveBoxes();
     }
 
+    /** While a width or height is typed, the size fields send a change per partial number ('1', '19', '192'), and a canvas
+     * drawn for each collapsed to a sliver until the typing ended; the layout redraws once the size has been still. */
+    renderSoon() {
+        clearTimeout(this.renderTimer);
+        this.renderTimer = setTimeout(() => this.render(), 400);
+    }
+
     render() {
         if (!this.canvas) {
             return;
         }
         let width = Number(document.getElementById('input_width')?.value) || 1024;
         let height = Number(document.getElementById('input_height')?.value) || 1024;
+        if (width < 64 || height < 64) {
+            [width, height] = this.lastSize || [1024, 1024];
+        }
+        this.lastSize = [width, height];
         this.canvas.width = 960;
         this.canvas.height = Math.max(64, Math.round(960 * height / width));
         this.canvas.style.maxWidth = `${420 * width / height}px`;
