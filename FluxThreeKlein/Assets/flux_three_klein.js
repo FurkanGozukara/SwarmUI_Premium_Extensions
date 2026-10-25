@@ -100,6 +100,7 @@ class FluxThreeKleinUI {
             if (this.boxes[this.selected]) {
                 this.boxes[this.selected].desc = this.description.value;
                 this.saveBoxes(false);
+                this.labelSelected();
             }
         });
         let typeRow = this.element('div', 'flux-three-type-row');
@@ -121,6 +122,7 @@ class FluxThreeKleinUI {
         this.lettering.addEventListener('input', () => {
             this.boxes[this.selected].text = this.lettering.value;
             this.saveBoxes(false);
+            this.labelSelected();
         });
         typeRow.append(this.type, this.lettering);
         this.fields.appendChild(typeRow);
@@ -295,13 +297,25 @@ class FluxThreeKleinUI {
         this.select.hidden = this.boxes.length == 0;
         let box = this.boxes[this.selected];
         if (box) {
-            if (document.activeElement != this.description) {
+            // a focused description keeps what is being typed into it, but only for the box it belongs to: a click on
+            // another box on the canvas leaves the focus in the text box, which then showed the previous box's words
+            if (document.activeElement != this.description || this.descriptionBox !== this.selected) {
                 this.description.value = box.desc || '';
             }
+            this.descriptionBox = this.selected;
             this.type.value = box.type || 'obj';
             this.lettering.hidden = this.type.value != 'text';
             this.lettering.value = box.text || '';
             this.coordInputs.forEach((input, i) => input.value = +(box.bbox[i] * 100).toFixed(2));
+        }
+    }
+
+    /** The box list's label for the selected box follows its description or lettering as it is typed (a full render, which
+     * rebuilt the list, does not run on each keystroke). */
+    labelSelected() {
+        let box = this.boxes[this.selected], option = this.select.options[this.selected];
+        if (box && option) {
+            option.textContent = `<obj_${this.selected + 1}> ${box.desc || box.text || 'Describe this box'}`;
         }
     }
 

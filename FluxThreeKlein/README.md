@@ -89,7 +89,9 @@ Fixed-seed repetition produced identical pixels. Version 1.0.1 also recognizes t
 SwarmUI's current class name, `flux-3-image-klein` (the core remaps the former `flux.3-klein`); with 1.0.0 the
 FLUX.3 Klein group stayed hidden on those cores. Version 1.0.2 keeps the layout canvas drawn while a width or height is
 typed: the size fields send a change per partial number, and the canvas redraws once the size has been still for
-0.4 seconds instead of collapsing to a sliver for each digit. The BF16 option and actual
+0.4 seconds instead of collapsing to a sliver for each digit. Version 1.0.3 shows the selected box's own description when another box is
+clicked on the canvas while the description field has focus, and the box list's label follows the description as it
+is typed. The BF16 option and actual
 FLUX.3 LoRA weights were not separately generated in this validation; they use
 Swarm's native model and LoRA path.
 
