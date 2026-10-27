@@ -247,10 +247,19 @@ function applyGenjutsuToSpec(H3, spec, ctx) {
     let megapixels = Number(ctx.param('genjutsumotionguidemegapixels')) || 0.15;
     let scale = Math.sqrt((megapixels * 1024 * 1024) / (clip.width * clip.height));
     spec.frames = length;
-    spec.refVideos[0] = {
-        ...clip, width: Math.max(1, H3.pyRound(clip.width * scale)), height: Math.max(1, H3.pyRound(clip.height * scale)),
-        duration: length / H3.FPS, trimStart: null, trimEnd: null,
-    };
+    if (ctx.param('genjutsumethod') === 'aligned guide + task LoRA') {
+        spec.refVideos = spec.refVideos.slice(1);
+        spec.keyframeVideoFrames = length;
+    }
+    else {
+        spec.refVideos[0] = {
+            ...clip, width: Math.max(1, H3.pyRound(clip.width * scale)), height: Math.max(1, H3.pyRound(clip.height * scale)),
+            duration: length / H3.FPS, trimStart: null, trimEnd: null,
+        };
+    }
+    if (clip.hasAudio && ctx.param('genjutsulockclipaudio') !== false) {
+        spec.audioGuide = true;
+    }
     return false;
 }
 

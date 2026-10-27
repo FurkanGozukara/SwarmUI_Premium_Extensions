@@ -97,7 +97,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, MiniMax H3 Genjutsu (replace the person in a video with the character of an image: SAM 3.1 inverted motion guide, automatic Genjutsu prompt with a local Qwen3-VL describer, the clip's own length, aspect and soundtrack), plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.22.4";
+        Version = "1.23.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -126,6 +126,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3LowVRAM"] = LowVramFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3FaceStitch"] = FaceInpaintFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesMiniMaxH3InitAudio"] = InitAudioFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["SECoursesH3ReferenceToVideo"] = "minimax_h3_stereo_refs";
         ComfyUIBackendExtension.NodeToFeatureMap["SEH3LongLipSync"] = LongLipSyncFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECodeFormerMouthImages"] = MouthPassFeatureId;
         RegisterParameters();
@@ -154,6 +155,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(ApplyInitAudioTextToVideo, -5.1);
         // Genjutsu locks the clip's own soundtrack the same way (Genjutsu and Init Audio exclude each other)
         WorkflowGenerator.AddStep(ApplyGenjutsuAudioLock, -5.05);
+        WorkflowGenerator.AddStep(ApplyGenjutsuTaskGuide, -5.04);
         // the Image To Video pass builds its own conditioning inside CreateImageToVideo, hook it there
         WorkflowGenerator.AltImageToVideoPostHandlers.Add(ApplyInitAudioImageToVideo);
         WorkflowGenerator.AddStep(ExtractAudioOnly, 0.9);
@@ -174,7 +176,18 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(ReplaceLegacyBatchImages, 199);
         WorkflowGenerator.AddStep(FinalizeLongLipSync, 200);
         WorkflowGenerator.AddStep(ApplyRefMods, 201);
+        WorkflowGenerator.AddStep(UseStereoReferenceEncoder, 202);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
+    }
+
+    /// <summary>Normalize mono/surround references at our H3 encoder boundary after graph construction.</summary>
+    private static void UseStereoReferenceEncoder(WorkflowGenerator g)
+    {
+        if (!g.Features.Contains("minimax_h3_stereo_refs"))
+        {
+            return;
+        }
+        g.RunOnNodesOfClass("MiniMaxH3ReferenceToVideo", (_, node) => node["class_type"] = "SECoursesH3ReferenceToVideo");
     }
 
     private static T2IParamType AudioOnlyParamType(string name, T2IParamInput input)
@@ -1010,7 +1023,8 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     /// <summary>Model-gen step: wrap the loaded MiniMax H3 model (and video VAE) with the sol-engine speed nodes.</summary>
     private static void ApplySpeedOptimizations(WorkflowGenerator g)
     {
-        if (!g.UserInput.Get(SpeedOptimize, false) || !g.IsMiniMaxH3())
+        if (!g.UserInput.Get(SpeedOptimize, false) || !g.IsMiniMaxH3()
+            || (g.UserInput.Get(GenjutsuEnabled, false) && g.UserInput.Get(GenjutsuMethod, GenjutsuOriginal) == GenjutsuAligned))
         {
             return;
         }

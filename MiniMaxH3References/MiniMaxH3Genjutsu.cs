@@ -17,6 +17,7 @@ public partial class MiniMaxH3ReferencesExtension
 {
     private static T2IRegisteredParam<bool> GenjutsuEnabled, GenjutsuMatchAspect, GenjutsuAutoDescribe, GenjutsuLockAudio;
     private static T2IRegisteredParam<string> GenjutsuTarget, GenjutsuBackground, GenjutsuSpeech, GenjutsuSpeechLanguage, GenjutsuSamModel, GenjutsuDescribeModel;
+    private static T2IRegisteredParam<string> GenjutsuMethod, GenjutsuCharacterLora, GenjutsuMotionLora, GenjutsuTrainingAdapter;
     private static T2IRegisteredParam<double> GenjutsuGuideMegapixels, GenjutsuThreshold;
     private static T2IRegisteredParam<int> GenjutsuMaskGrow;
 
@@ -25,6 +26,10 @@ public partial class MiniMaxH3ReferencesExtension
 
     /// <summary>SAM 3.1 checkpoint (Comfy-Org/sam3.1) and the local vision LLM of Auto Describe (Qwen Image 2.1's Qwen3-VL 8B encoder).</summary>
     public const string GenjutsuSamDefault = "sam3.1_multiplex_fp16.safetensors", GenjutsuDescribeDefault = "qwen3vl_8b_int8_convrot.safetensors";
+    public const string GenjutsuOriginal = "original Genjutsu", GenjutsuTask = "Genjutsu + task LoRA", GenjutsuAligned = "aligned guide + task LoRA";
+    public const string GenjutsuCharacterDefault = "minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
+        GenjutsuMotionDefault = "minimax_h3_motion_transfer_v1.0_ref2va.safetensors",
+        GenjutsuAdapterDefault = "minimax_h3_ref2va_training_adapter_v2.safetensors";
 
     private sealed class GenjutsuState
     {
@@ -37,6 +42,7 @@ public partial class MiniMaxH3ReferencesExtension
     private static void RegisterGenjutsuParameters()
     {
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesH3GenjutsuMotionGuide"] = GenjutsuFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["SECoursesH3GenjutsuApply"] = "minimax_h3_genjutsu_apply";
         T2IParamGroup group = new("MiniMax H3 Genjutsu", Open: true, OrderPriority: 8.1,
             Description: "Replace the person in a video with your character. Turn on MiniMax H3 References, attach the clip as @video1 and the new character as @image1, "
                 + "then Generate. SAM 3.1 finds the performer in every frame and inverts only the performer, so MiniMax H3 copies the motion, timing, camera and lip movements "
@@ -51,6 +57,8 @@ public partial class MiniMaxH3ReferencesExtension
         }
         GenjutsuEnabled = Reg<bool>("MiniMax H3 Genjutsu", "Swap the performer of @video1 for the character of @image1. Needs MiniMax H3 References on, a MiniMax H3 model, the clip as the first reference video and the character as the first prompt image.", "false", -10);
         dep = GenjutsuEnabled.Type.ID;
+        GenjutsuMethod = Reg<string>("Genjutsu Method", "Original uses the inverted native reference. Task LoRA strengthens character transfer with the same guide. Aligned guide uses the source frames on H3's output timeline and a task LoRA; it needs more tokens and uses dense INT8 attention. Compare motion and likeness on your clip.",
+            GenjutsuOriginal, -9.95, values: _ => [GenjutsuOriginal, GenjutsuTask, GenjutsuAligned]);
         GenjutsuBackground = Reg<string>("Genjutsu Background", "'video (character replacement)' keeps the clip's location, lighting and framing and replaces only the performer. 'image (motion transfer)' keeps the character image's background and takes only the motion from the clip.",
             "video (character replacement)", -9.9, values: _ => ["video (character replacement)", "image (motion transfer)"]);
         GenjutsuTarget = Reg<string>("Genjutsu Target", "Who to replace, as SAM 3.1 text: 'person' for one person; 'man in red:1' or 'man:1' picks one of several. One phrase only.", "person", -9.8);
@@ -65,6 +73,9 @@ public partial class MiniMaxH3ReferencesExtension
         GenjutsuMaskGrow = Reg<int>("Genjutsu Mask Grow", "Grow the performer mask by this many pixels so hair and loose clothing edges are inverted too.", "0", -9.1, 0, 64, 1, advanced: true);
         GenjutsuSamModel = Reg<string>("Genjutsu SAM Model", "SAM 3.1 checkpoint in Models/Stable-Diffusion (MiniMax-H3 Core Bundle).", GenjutsuSamDefault, -9, advanced: true);
         GenjutsuDescribeModel = Reg<string>("Genjutsu Describe Model", "Qwen3-VL text encoder used by Auto Describe (MiniMax-H3 Core Bundle, also the Qwen Image 2.1 encoder).", GenjutsuDescribeDefault, -8.9, advanced: true);
+        GenjutsuCharacterLora = Reg<string>("Genjutsu Character LoRA", "Character Swap v1.1 for video-background character replacement; loaded at strength 1. MiniMax-H3 Core Bundle.", GenjutsuCharacterDefault, -8.8, advanced: true);
+        GenjutsuMotionLora = Reg<string>("Genjutsu Motion LoRA", "Motion Transfer v1.0 for image-background motion transfer; loaded after training adapter V2 at strength 1.", GenjutsuMotionDefault, -8.7, advanced: true);
+        GenjutsuTrainingAdapter = Reg<string>("Genjutsu Training Adapter", "Training adapter V2 used with the Motion Transfer LoRA. Character Swap does not load it.", GenjutsuAdapterDefault, -8.6, advanced: true);
     }
 
     /// <summary>Called by ApplyReferences before it creates the MiniMax H3 reference node: reference video 1 becomes the SAM 3.1 motion guide,
@@ -92,6 +103,7 @@ public partial class MiniMaxH3ReferencesExtension
             throw new SwarmUserErrorException("MiniMax H3 Genjutsu needs the new character as the first prompt image (@image1) or as a RefMod.");
         }
         string background = g.UserInput.Get(GenjutsuBackground, "video (character replacement)");
+        string method = g.UserInput.Get(GenjutsuMethod, GenjutsuOriginal);
         string sam = g.CreateNode("CheckpointLoaderSimple", new JObject()
         {
             ["ckpt_name"] = g.UserInput.Get(GenjutsuSamModel, GenjutsuSamDefault)
@@ -110,10 +122,16 @@ public partial class MiniMaxH3ReferencesExtension
             ["height"] = inputs["height"],
             ["match_source_aspect"] = g.UserInput.Get(GenjutsuMatchAspect, true),
             ["audio"] = clipAudio,
-            ["refine_iterations"] = 2
+            ["refine_iterations"] = 2,
+            ["method"] = method
         });
         inputs["ref_videos.ref_video_0"] = WorkflowGenerator.NodePath(guide, 0);
         inputs["ref_video_audios.ref_video_audio_0"] = WorkflowGenerator.NodePath(guide, 5);
+        if (method == GenjutsuAligned)
+        {
+            inputs.Remove("ref_videos.ref_video_0");
+            inputs.Remove("ref_video_audios.ref_video_audio_0");
+        }
         inputs["length"] = WorkflowGenerator.NodePath(guide, 2);
         inputs["width"] = WorkflowGenerator.NodePath(guide, 3);
         inputs["height"] = WorkflowGenerator.NodePath(guide, 4);
@@ -148,7 +166,9 @@ public partial class MiniMaxH3ReferencesExtension
             ["images"] = clipFrames,
             ["audio"] = WorkflowGenerator.NodePath(guide, 5),
             ["speech"] = g.UserInput.Get(GenjutsuSpeech, ""),
-            ["speech_language"] = g.UserInput.Get(GenjutsuSpeechLanguage, "English")
+            ["speech_language"] = g.UserInput.Get(GenjutsuSpeechLanguage, "English"),
+            ["method"] = method,
+            ["target"] = g.UserInput.Get(GenjutsuTarget, "person")
         };
         if (inputs["ref_images.ref_image_0"] is JArray character)
         {
@@ -169,6 +189,39 @@ public partial class MiniMaxH3ReferencesExtension
         inputs["prompt"] = WorkflowGenerator.NodePath(prompt, 0);
         GenjutsuStates.AddOrUpdate(g, new GenjutsuState() { Guide = guide });
         Logs.Info($"MiniMax H3 Genjutsu: @video1 becomes the SAM 3.1 motion guide ('{g.UserInput.Get(GenjutsuTarget, "person")}', {background}, {g.UserInput.Get(GenjutsuGuideMegapixels, 0.15)} MP), length from the clip, Auto Describe {(describe ? "on" : "off")}.");
+    }
+
+    /// <summary>Apply the selected task LoRA and, in aligned mode, the original source-video guide.</summary>
+    private static void ApplyGenjutsuTaskGuide(WorkflowGenerator g)
+    {
+        if (!GenjutsuStates.TryGetValue(g, out GenjutsuState state))
+        {
+            return;
+        }
+        string method = g.UserInput.Get(GenjutsuMethod, GenjutsuOriginal);
+        if (method == GenjutsuOriginal)
+        {
+            return;
+        }
+        if (!g.Features.Contains("minimax_h3_genjutsu_apply"))
+        {
+            throw new SwarmUserErrorException("This Genjutsu method needs the updated FoleyExtension. Run Windows_Install_or_Update_SwarmUI.bat and restart the backend.");
+        }
+        string apply = g.CreateNode("SECoursesH3GenjutsuApply", new JObject()
+        {
+            ["model"] = g.CurrentModel.Path,
+            ["positive"] = g.FinalPrompt,
+            ["latent"] = g.CurrentMedia.Path,
+            ["vae"] = g.CurrentVae.Path,
+            ["guide"] = WorkflowGenerator.NodePath(state.Guide, 0),
+            ["method"] = method,
+            ["background"] = g.UserInput.Get(GenjutsuBackground, "video (character replacement)"),
+            ["character_lora"] = g.UserInput.Get(GenjutsuCharacterLora, GenjutsuCharacterDefault),
+            ["motion_lora"] = g.UserInput.Get(GenjutsuMotionLora, GenjutsuMotionDefault),
+            ["training_adapter"] = g.UserInput.Get(GenjutsuTrainingAdapter, GenjutsuAdapterDefault)
+        });
+        g.CurrentModel = g.CurrentModel.WithPath(WorkflowGenerator.NodePath(apply, 0));
+        g.FinalPrompt = WorkflowGenerator.NodePath(apply, 1);
     }
 
     /// <summary>Right before the base sampler (-5): lock the clip's soundtrack (cut to the output length) into the joint audio/video latent

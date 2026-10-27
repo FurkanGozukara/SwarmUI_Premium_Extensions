@@ -3,6 +3,23 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Genjutsu task adapters and mono audio (1.23.0)
+
+Genjutsu Method now offers the original inverted-reference path, the same path with a task
+LoRA, and an aligned original-frame guide with a task LoRA. Character Swap v1.1 is selected
+for a video background; an image background loads training adapter V2 then Motion Transfer
+v1.0, all at strength 1. The recipes follow [Henge](https://github.com/alisson-anjos/Henge).
+Aligned mode excludes the guide from native video references, uses native Add Guide and
+dense INT8 attention, and automatically skips the sparse/cache optimizer. It costs more
+tokens; it does not guarantee better timing or identity on every clip. FastH3 stays at
+eight steps without a turbo LoRA; the quality preset stays at twenty steps.
+
+FoleyExtension now normalizes mono/surround reference audio to H3's stereo layout, including
+RefMods. This prevents the reproducible one-channel `[356, 32]` / `[712, 32]` row-packing
+failure. Stereo input is unchanged. Update both this extension and FoleyExtension, then
+download the current MiniMax-H3 or FastH3 Omni Core Bundle (the three task adapters are
+included). The adapters retain their [asset licenses](https://huggingface.co/Alissonerdx/Minimax-H3-ComfyUI).
+
 ## Dragging from History (fixed in 1.22.4)
 
 A video or image dragged from SwarmUI's History onto the prompt is attached as itself again: a video becomes
