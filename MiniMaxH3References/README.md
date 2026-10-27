@@ -3,13 +3,14 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
-## Optional LightVAE video decoder (1.24.0)
+## Optional LightVAE video decoder (1.24.1)
 
 **MiniMax H3 Video Decoder** selects None (original), INT8 ConvRot LightVAE or
 the original-precision FP32 Comfy LightVAE decoder. It changes final H3 video
 decoding only; references still use the original video encoder and audio keeps
 its own VAE. Long Lip Sync accepts this option through `decode_vae`. Image
-refiner decoders are excluded. Applying existing presets resets this option to
+refiner decoders are excluded. The final graph traces VAE optimization wrappers
+to the H3 loader before replacing decoding. Applying existing presets resets this option to
 None; the new FastH3 Omni LightVAE preset selects INT8 and exact Low VRAM mode.
 
 Download the MiniMax-H3 or FastH3 Omni Core Bundle for the INT8 decoder. FP32
