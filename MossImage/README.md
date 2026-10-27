@@ -103,8 +103,9 @@ The mode uses [ChenkinLab's Moss-Image-Edit](https://modelscope.cn/models/Chenki
 a rank-64 LoRA trained on MOSS-Image SFT, re-hosted with ComfyUI LoRA keys as
 `MOSS_Image_Edit_LoRA.safetensors` in the MOSS-Image Core Bundle and added
 automatically. The LoRA alone does not edit: the SECoursesAudioTools **MOSS-Image
-Edit References** node adds its reference branch (the images pass through every
-block at timestep 0 and the result attends to them). Swarm's own MOSS-Image text
+Native Edit References** and **Apply Native Edit Conditioning** nodes pass the
+references to ComfyUI's native reference branch (images at timestep 0, text
+positions starting at zero). No model blocks are replaced. Swarm's MOSS-Image text
 encoder would also show the attached images to Qwen3.5, so the extension withholds
 them from it.
 
@@ -120,6 +121,27 @@ them from it.
   A second image's object is placed well; copying its exact look is weaker. SFT is
   required (Base lost the subject in one of two tests). ChenkinLab's code is GPLv3;
   no separate license is stated for the weights.
+
+## Color and depth control
+
+The two **Color + Depth Control** presets retain the gallery prompt system,
+prompt batches, resolution/seed controls and optional LoRAs. Upload a color map,
+a depth map, or both in the MOSS-Image group. No maps, or strength zero, skips
+both control and its adapter. Applying another preset resets the control switch.
+
+Color maps use one flat color per region; colors are IDs, not requested output
+colors. Depth uses near white and far black. Maps are resized to the output;
+nearest-neighbor color resizing preserves region IDs. The native ComfyUI
+`MOSSImageControl` supplies conditioning; the ungated Comfy-Org adapter is included
+in the core bundle. This is community work by darask0, not an OpenMOSS release.
+
+Start with Control End **0.3** for synthetic maps: quality uses strength **1**,
+Turbo **0.5**. Describe people, clothes, poses and positions explicitly. Keeping
+synthetic controls active too long can retain mannequin surfaces; real-image
+maps can use End 1. Layout guidance is approximate. Our two-person test kept
+natural clothing and the raised-arm/walking poses in both UIs. The four-step
+DMAD research recipe needs a different sampler and residual correction; it is
+not substituted for the existing tested eight-step DMD recipe.
 
 ## Prompt batches
 

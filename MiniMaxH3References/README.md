@@ -3,6 +3,26 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Optional LightVAE video decoder (1.24.0)
+
+**MiniMax H3 Video Decoder** selects None (original), INT8 ConvRot LightVAE or
+the original-precision FP32 Comfy LightVAE decoder. It changes final H3 video
+decoding only; references still use the original video encoder and audio keeps
+its own VAE. Long Lip Sync accepts this option through `decode_vae`. Image
+refiner decoders are excluded. Applying existing presets resets this option to
+None; the new FastH3 Omni LightVAE preset selects INT8 and exact Low VRAM mode.
+
+Download the MiniMax-H3 or FastH3 Omni Core Bundle for the INT8 decoder. FP32
+decoder/encoder alternatives are individual catalog choices, saved under the
+same shared `VAE/LightVAE` folder. The native Comfy checkpoints were verified
+as F32 storage. No duplicate original H3 VAE or text encoder is required.
+
+LightVAE is block-pruned and changes reconstruction. Compare detail with None
+for each project; this preset makes no universal speed or quality claim. All
+gallery references, prompt batches, seed/resolution controls and optional user
+LoRAs stay available. Requires current native LightVAE support in ComfyUI
+(validated with v0.43.0).
+
 ## Genjutsu task adapters and mono audio (1.23.0)
 
 Genjutsu Method now offers the original inverted-reference path, the same path with a task

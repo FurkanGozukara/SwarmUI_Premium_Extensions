@@ -22,6 +22,7 @@ public class MossImageExtension : Extension
     private const string AttentionFeature = "secourses_model_attention_backend";
     private const string RescalingFeature = "secourses_temporal_score_rescaling";
     private const string EditFeature = "secourses_moss_image_edit";
+    private const string ControlFeature = "secourses_moss_image_control";
     private const string TextMode = "Text / JSON prompt";
     private const string LayoutMode = "Layout boxes";
     private const string EditMode = "Image edit (attached images)";
@@ -31,7 +32,11 @@ public class MossImageExtension : Extension
     private const string InputError = "secourses_moss_input_error";
     public const string DeBandLora = "MOSS_Image_SFT_DeBand_L37-41.safetensors";
     public const string EditLora = "MOSS_Image_Edit_LoRA.safetensors";
+    public const string ControlLora = "moss_image_color_depth_control.safetensors";
     private static T2IRegisteredParam<bool> Enabled, DeBand;
+    private static T2IRegisteredParam<bool> Control;
+    private static T2IRegisteredParam<Image> ColorMap, DepthMap;
+    private static T2IRegisteredParam<double> ControlStrength, ControlStart, ControlEnd;
     private static T2IRegisteredParam<string> Mode, SkipLayers, Attention, Boxes, PromptList;
     private static T2IRegisteredParam<double> SkipStart, SkipEnd, ScoreRescaling;
     private static T2IRegisteredParam<int> EditReferenceSize;
@@ -52,7 +57,7 @@ public class MossImageExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "MOSS-Image negative-branch layer skipping, safe attention backends, SFT de-banding, score rescaling, JSON layout prompts, visual layout boxes and prompt batches, using SwarmUI's native ComfyUI workflow.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.1.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/MossImage";
     }
 
@@ -61,7 +66,8 @@ public class MossImageExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["MOSSImageLayoutPrompt"] = Feature;
         ComfyUIBackendExtension.NodeToFeatureMap["ModelAttentionBackend"] = AttentionFeature;
         ComfyUIBackendExtension.NodeToFeatureMap["TemporalScoreRescaling"] = RescalingFeature;
-        ComfyUIBackendExtension.NodeToFeatureMap["SEMossImageEditReferences"] = EditFeature;
+        ComfyUIBackendExtension.NodeToFeatureMap["SEMossImageNativeEdit"] = EditFeature;
+        ComfyUIBackendExtension.NodeToFeatureMap["SEMossImageColorDepthControl"] = ControlFeature;
     }
 
     public override void OnInit()
@@ -90,6 +96,18 @@ public class MossImageExtension : Extension
             "[]", ViewType: ParamViewType.BIG, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: 0));
         PromptList = T2IParamTypes.Register<string>(new("MOSS Image Prompt List", "Extra prompts for Generate prompt batch. Add prompts or import .txt files/a folder; each text file is one complete prompt, JSON layouts included. The batch includes the main prompt and runs sequentially with the same captured settings.",
             "[]", ViewType: ParamViewType.BIG, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: 5, IntentionalUnused: true));
+        Control = T2IParamTypes.Register<bool>(new("MOSS Image Color Depth Control", "Follow a color-region map, a depth map, or both using darask0's community adapter. Color maps identify regions; depth is near white, far black. The control LoRA is loaded only when a map is attached. Works with plain prompts, JSON, layout boxes and prompt batches.",
+            "false", IgnoreIf: "false", Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: 6));
+        ColorMap = T2IParamTypes.Register<Image>(new("MOSS Image Color Map", "Optional RGB map: a different flat color per object/region. Colors are region IDs. Resized without blending the color IDs to the output size. Describe the objects and their positions in the prompt or layout boxes.",
+            null, Group: group, FeatureFlag: Feature, DependNonDefault: Control.Type.ID, OrderPriority: 6.1));
+        DepthMap = T2IParamTypes.Register<Image>(new("MOSS Image Depth Map", "Optional depth map: near white, far black. Resized to the output size. Either map can be used alone; both can be combined.",
+            null, Group: group, FeatureFlag: Feature, DependNonDefault: Control.Type.ID, OrderPriority: 6.2));
+        ControlStrength = T2IParamTypes.Register<double>(new("MOSS Image Control Strength", "Scales the control maps' latent contribution. Zero bypasses the control and its adapter.",
+            "1", Min: 0, Max: 10, Step: 0.05, Group: group, FeatureFlag: Feature, DependNonDefault: Control.Type.ID, OrderPriority: 6.3));
+        ControlStart = T2IParamTypes.Register<double>(new("MOSS Image Control Start", "Fraction of sampling at which map control starts.",
+            "0", Min: 0, Max: 1, Step: 0.01, Group: group, FeatureFlag: Feature, DependNonDefault: Control.Type.ID, OrderPriority: 6.4));
+        ControlEnd = T2IParamTypes.Register<double>(new("MOSS Image Control End", "0.5 for synthetic maps: establish pose and placement first, then finish natural surfaces. 1.0 for maps from real images. This window intersects any existing prompt schedule.",
+            "0.5", Min: 0, Max: 1, Step: 0.01, Group: group, FeatureFlag: Feature, DependNonDefault: Control.Type.ID, OrderPriority: 6.5));
         T2IParamInput.SpecialParameterHandlers.Add(PrepareInput);
         // Early handlers run outside Swarm's readable-error catch. Report our
         // validation failures at the late stage, before claiming a backend.
@@ -104,6 +122,8 @@ public class MossImageExtension : Extension
         // After LoRAs (-10) and the native sigma shift, so the skip window shares the model's own schedule.
         WorkflowGenerator.AddModelGenStep(ApplyModelPatches, -3.2);
         WorkflowGenerator.AddStep(AddLayout, -6.9);
+        WorkflowGenerator.AddStep(ApplyNativeEdit, -6.85);
+        WorkflowGenerator.AddStep(ApplyColorDepthControl, -6.8);
         // After the model loads (-15), before the native positive (-8) and negative (-7) encoders; restored before the final save step (10).
         WorkflowGenerator.AddStep(HoldPromptImages, -8.5);
         WorkflowGenerator.AddStep(RestorePromptImages, 9.9);
@@ -156,6 +176,12 @@ public class MossImageExtension : Extension
             input.Remove(Boxes);
             input.Remove(PromptList);
             input.Remove(EditReferenceSize);
+            input.Remove(Control);
+            input.Remove(ColorMap);
+            input.Remove(DepthMap);
+            input.Remove(ControlStrength);
+            input.Remove(ControlStart);
+            input.Remove(ControlEnd);
             input.RequiredFlags.Remove(Feature);
             return;
         }
@@ -471,6 +497,15 @@ public class MossImageExtension : Extension
             ["lora_name"] = lora.ToString(g.ModelFolderFormat),
             ["strength_model"] = 1.0
         });
+        g.LoadingModel = [loraNode, 0];
+    }
+
+    private static void ApplyNativeEdit(WorkflowGenerator g)
+    {
+        if (!Active(g) || g.UserInput.Get(Mode, TextMode) != EditMode)
+        {
+            return;
+        }
         List<Image> images = HeldPromptImages.TryGetValue(g.UserInput, out List<Image> held) ? held : g.UserInput.Get(T2IParamTypes.PromptImages);
         string inputs = g.CreateNode("SEFibo2SwarmInputs", new JObject()
         {
@@ -479,16 +514,62 @@ public class MossImageExtension : Extension
             ["init_base64"] = "",
             ["mask_base64"] = ""
         });
-        string edit = g.CreateNode("SEMossImageEditReferences", new JObject()
+        string edit = g.CreateNode("SEMossImageNativeEdit", new JObject()
         {
-            ["model"] = WorkflowGenerator.NodePath(loraNode, 0),
-            ["vae"] = g.LoadingVAE,
+            ["vae"] = g.CurrentVae.Path,
             ["references"] = WorkflowGenerator.NodePath(inputs, 0),
             ["reference_max_edge"] = g.UserInput.Get(EditReferenceSize, 1024),
             ["width"] = g.UserInput.GetImageWidth(),
             ["height"] = g.UserInput.GetImageHeight()
         });
-        g.LoadingModel = [edit, 0];
+        string apply = g.CreateNode("SEMossImageApplyEdit", new JObject()
+        {
+            ["positive"] = g.FinalPrompt, ["negative"] = g.FinalNegativePrompt,
+            ["references"] = WorkflowGenerator.NodePath(edit, 0)
+        });
+        g.FinalPrompt = [apply, 0];
+        g.FinalNegativePrompt = [apply, 1];
+    }
+
+    private static void ApplyColorDepthControl(WorkflowGenerator g)
+    {
+        if (!Active(g) || !g.UserInput.Get(Control, false))
+        {
+            return;
+        }
+        bool color = g.UserInput.TryGet(ColorMap, out Image colorMap), depth = g.UserInput.TryGet(DepthMap, out Image depthMap);
+        if ((!color && !depth) || g.UserInput.Get(ControlStrength, 1) == 0)
+        {
+            return;
+        }
+        if (!g.Features.Contains(ControlFeature))
+        {
+            throw new SwarmUserErrorException("MOSS color/depth control needs the current SECoursesAudioTools nodes. Run the SwarmUI updater and restart the backend.");
+        }
+        if (!Program.T2IModelSets.TryGetValue("LoRA", out T2IModelHandler loras) || !loras.Models.TryGetValue(ControlLora, out T2IModel lora))
+        {
+            throw new SwarmUserErrorException($"Download {ControlLora} with the MOSS-Image Core Bundle in the SECourses model downloader.");
+        }
+        JObject inputs = new()
+        {
+            ["model"] = g.CurrentModel.Path, ["positive"] = g.FinalPrompt, ["negative"] = g.FinalNegativePrompt,
+            ["vae"] = g.CurrentVae.Path, ["control_lora"] = lora.ToString(g.ModelFolderFormat), ["lora_strength"] = 1.0,
+            ["strength"] = g.UserInput.Get(ControlStrength, 1), ["start_percent"] = g.UserInput.Get(ControlStart, 0),
+            ["end_percent"] = g.UserInput.Get(ControlEnd, 0.5),
+            ["width"] = g.UserInput.GetImageWidth(), ["height"] = g.UserInput.GetImageHeight()
+        };
+        if (color)
+        {
+            inputs["color_map"] = g.LoadImage(colorMap, "${mossimagecolormap}", false).Path;
+        }
+        if (depth)
+        {
+            inputs["depth_map"] = g.LoadImage(depthMap, "${mossimagedepthmap}", false).Path;
+        }
+        string control = g.CreateNode("SEMossImageColorDepthControl", inputs);
+        g.CurrentModel = g.CurrentModel.WithPath([control, 0]);
+        g.FinalPrompt = [control, 1];
+        g.FinalNegativePrompt = [control, 2];
     }
 
     /// <summary>The result of an edit has image 1's reference size (ApplyEditSize sets Width / Height to it after the Megapixels extension).</summary>

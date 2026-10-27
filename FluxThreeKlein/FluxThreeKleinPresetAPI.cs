@@ -10,7 +10,7 @@ using SwarmUI.WebAPI;
 
 namespace FurkanGozukara.SwarmExtensions.FluxThreeKlein;
 
-/// <summary>Preserve native PNG artwork on this extension's presets without JPEG re-encoding.</summary>
+/// <summary>Preserve native PNG artwork on SECourses presets without JPEG re-encoding; the route name is retained for compatibility.</summary>
 public static class FluxThreeKleinPresetAPI
 {
     public static Task<JObject> FluxKleinSavePngPreset(Session session, JObject raw)
@@ -19,10 +19,9 @@ public static class FluxThreeKleinPresetAPI
         string title = Utilities.StrictFilenameClean(raw.Value<string>("title") ?? "");
         string preview = raw.Value<string>("preview_image") ?? "";
         const string prefix = "data:image/png;base64,";
-        if (string.IsNullOrWhiteSpace(title) || raw["param_map"] is not JObject parameters
-            || !string.Equals(parameters.Value<string>("fluxkleinadvanced"), "true", StringComparison.OrdinalIgnoreCase))
+        if (string.IsNullOrWhiteSpace(title) || raw["param_map"] is not JObject parameters)
         {
-            return Fail("This importer requires a FLUX.3 advanced preset with a valid title and parameters.");
+            return Fail("This importer requires a valid preset title and parameters.");
         }
         if (!preview.StartsWith(prefix, StringComparison.Ordinal) || preview.Length > 16 * 1024 * 1024)
         {

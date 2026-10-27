@@ -35,7 +35,7 @@ public class FluxThreeKleinExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "FLUX.3 Klein advanced prompting, image references, visual layout boxes and prompt batches, using SwarmUI's native ComfyUI workflow.";
         License = "MIT";
-        Version = "1.0.3";
+        Version = "1.0.4";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/FluxThreeKlein";
     }
 

@@ -23,6 +23,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     private static bool _initialized;
     private static T2IRegisteredParam<bool> Enabled;
     private static T2IRegisteredParam<string> ReferenceImageSize;
+    private static T2IRegisteredParam<T2IModel> VideoDecoder;
     private static T2IRegisteredParam<double> ReferenceMaxSeconds;
     private static T2IRegisteredParam<string> ReferenceVideoTrims;
     private static List<T2IRegisteredParam<VideoFile>> ReferenceVideos = [];
@@ -97,7 +98,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, MiniMax H3 Genjutsu (replace the person in a video with the character of an image: SAM 3.1 inverted motion guide, automatic Genjutsu prompt with a local Qwen3-VL describer, the clip's own length, aspect and soundtrack), plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.23.0";
+        Version = "1.24.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -177,6 +178,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AddStep(FinalizeLongLipSync, 200);
         WorkflowGenerator.AddStep(ApplyRefMods, 201);
         WorkflowGenerator.AddStep(UseStereoReferenceEncoder, 202);
+        WorkflowGenerator.AddStep(ApplyVideoDecoder, 203);
         Logs.Info("MiniMax H3 complete image, video, and audio reference support initialized.");
     }
 
@@ -188,6 +190,40 @@ public partial class MiniMaxH3ReferencesExtension : Extension
             return;
         }
         g.RunOnNodesOfClass("MiniMaxH3ReferenceToVideo", (_, node) => node["class_type"] = "SECoursesH3ReferenceToVideo");
+    }
+
+    /// <summary>Replace video decoders only; original reference encoders and the audio VAE keep their paths.</summary>
+    private static void ApplyVideoDecoder(WorkflowGenerator g)
+    {
+        if (!g.IsMiniMaxH3() || !g.UserInput.TryGet(VideoDecoder, out T2IModel decoder))
+        {
+            return;
+        }
+        bool UsesH3VideoVae(JObject node)
+        {
+            if (node?.Value<string>("class_type") == "SEH3LongLipSync")
+            {
+                return true;
+            }
+            if (node?.Value<string>("class_type") is not ("VAEDecode" or "VAEDecodeTiled" or "SwarmVAEDecodeTiled")
+                || node["inputs"]?["vae"] is not JArray path)
+            {
+                return false;
+            }
+            string name = g.Workflow[path[0].ToString()]?["inputs"]?.Value<string>("vae_name")?.ToLowerInvariant() ?? "";
+            return name.Contains("minimax_h3_video") || name.Contains("lightvae-lite-h3-decoder");
+        }
+        List<JObject> targets = g.Workflow.Properties().Select(p => p.Value as JObject).Where(UsesH3VideoVae).ToList();
+        if (targets.Count == 0)
+        {
+            return;
+        }
+        string loader = g.CreateNode("VAELoader", new JObject { ["vae_name"] = decoder.ToString(g.ModelFolderFormat) });
+        foreach (JObject node in targets)
+        {
+            string input = node.Value<string>("class_type") == "SEH3LongLipSync" ? "decode_vae" : "vae";
+            node["inputs"][input] = WorkflowGenerator.NodePath(loader, 0);
+        }
     }
 
     private static T2IParamType AudioOnlyParamType(string name, T2IParamInput input)
@@ -222,6 +258,10 @@ public partial class MiniMaxH3ReferencesExtension : Extension
 
     private static void RegisterParameters()
     {
+        VideoDecoder = T2IParamTypes.Register<T2IModel>(new("MiniMax H3 Video Decoder",
+            "Optional decoder replacement. LightVAE decodes the sampled video while the original H3 VAE still encodes images and references. Audio keeps its own VAE. None preserves the original decoder. Download LightVAE from the MiniMax-H3 or FastH3 Omni core bundle; FP32 is also available separately in the model catalog. Also applies to Long Lip Sync.",
+            "None", IgnoreIf: "None", Subtype: "VAE", FeatureFlag: "comfyui", Group: T2IParamTypes.GroupCore, OrderPriority: 20.2,
+            GetValues: _ => ["None", "LightVAE/lightvae-lite-h3-decoder-int8-convrot.safetensors", "LightVAE/lightvae-lite-h3-decoder-comfy.safetensors"]));
         SpeedOptimize = T2IParamTypes.Register<bool>(new(
             "MiniMax H3 4x Speed",
             "Optional native ComfyUI SOL sparse attention, FirstBlockCache and batched VAE decoding. SOL and caching are approximate. Speed depends on resolution and settings; there is no universal 4x gain. Turn the master off for the standard model path.",
