@@ -1,0 +1,9 @@
+.anima-batch { width: 100%; margin-top: .6rem; }
+.anima-help { font-size: .87rem; line-height: 1.4; opacity: .9; margin: .4rem 0 .7rem; }
+.anima-toolbar { display: flex; flex-wrap: wrap; gap: .35rem; margin: .65rem 0; }
+.anima-button { font-size: .8rem; padding: .3rem .5rem; }
+.anima-description { width: 100%; max-width: 100%; box-sizing: border-box; margin: .25rem 0; min-height: 4.5rem; resize: vertical; padding: .4rem; }
+.anima-prompt-row { border-top: 1px solid #71809666; padding: .6rem 0; }
+.anima-prompt-row strong { font-size: .85rem; overflow-wrap: anywhere; }
+.anima-batch-status { font-size: .86rem; line-height: 1.4; margin-top: .5rem; }
+.anima-batch [hidden] { display: none !important; }

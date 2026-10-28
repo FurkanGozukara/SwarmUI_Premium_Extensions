@@ -135,8 +135,8 @@ nearest-neighbor color resizing preserves region IDs. The native ComfyUI
 `MOSSImageControl` supplies conditioning; the ungated Comfy-Org adapter is included
 in the core bundle. This is community work by darask0, not an OpenMOSS release.
 
-Start with Control End **0.3** for synthetic maps: quality uses strength **1**,
-Turbo **0.5**. Describe people, clothes, poses and positions explicitly. Keeping
+Start with Control End **0.3** and strength **0.5** for both quality and
+Turbo. Describe people, clothes, poses and positions explicitly. Keeping
 synthetic controls active too long can retain mannequin surfaces; real-image
 maps can use End 1. Layout guidance is approximate. Our two-person test kept
 natural clothing and the raised-arm/walking poses in both UIs. The four-step
