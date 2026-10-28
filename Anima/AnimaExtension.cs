@@ -27,7 +27,7 @@ public class AnimaExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Anima character and style references, separate reference guidance, APG/rescale, BF16 compute and sequential prompt batches. Native prompts, LoRAs, resolution, seeds, image-to-image and refiners stay in the normal SwarmUI workflow.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.0.1";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/Anima";
     }
 
@@ -74,8 +74,8 @@ public class AnimaExtension : Extension
         {
             return;
         }
-        string node = g.CreateNode("ModelComputeDtype", new JObject { ["model"] = g.CurrentModel.Path, ["dtype"] = "bf16" });
-        g.CurrentModel = g.CurrentModel.WithPath([node, 0]);
+        string node = g.CreateNode("ModelComputeDtype", new JObject { ["model"] = g.LoadingModel, ["dtype"] = "bf16" });
+        g.LoadingModel = [node, 0];
     }
 
     private static void HoldImages(WorkflowGenerator g)
