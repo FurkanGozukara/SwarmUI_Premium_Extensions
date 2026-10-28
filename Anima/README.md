@@ -1,6 +1,6 @@
 # Anima
 
-Native Anima text-to-image and ElectronGirl reference adapter integration. Install through the managed SwarmUI updater; it installs the adapter fork and SECoursesAudioTools.
+Native Anima text-to-image and ElectronGirl reference adapter integration. Install through the managed SwarmUI updater; it installs SECoursesAudioTools, whose Anima gallery guider contains the reference adapter (adapted from ElectronGirl's ComfyUI-Anima-Ref-Adapter), so no separate node pack is needed.
 
 Download the Anima Core Bundle. It contains base v1.0 INT8 ConvRot, Qwen3 600M, the reference adapter and the existing shared Qwen-Image VAE. BF16 is available separately. Anima arithmetic uses BF16 even when storage is INT8.
 
