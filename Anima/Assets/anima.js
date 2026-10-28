@@ -156,8 +156,8 @@ class AnimaUI {
         }
         let captured = getGenInput();
         let prompts = [captured.prompt || '', ...this.prompts.map(p => p.text)].filter(p => p.trim());
-        if (!captured.fiboadvanced || currentModelHelper?.curCompatClass != 'anima' || !prompts.length || prompts.length > 64) {
-            this.batchStatus.textContent = 'Select a Anima preset and enter between 1 and 64 prompts.';
+        if (!captured.animaadvanced || currentModelHelper?.curCompatClass != 'anima' || !prompts.length || prompts.length > 64) {
+            this.batchStatus.textContent = 'Select an Anima preset and enter between 1 and 64 prompts.';
             return;
         }
         // Reuse native progress, history and image display while isolating the batch's websocket.

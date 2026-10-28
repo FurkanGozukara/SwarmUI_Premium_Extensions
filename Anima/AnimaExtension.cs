@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Builtin_ComfyUIBackend;
@@ -21,13 +22,14 @@ public class AnimaExtension : Extension
     private static T2IRegisteredParam<double> Strength, Guidance, Phi;
     private static T2IRegisteredParam<string> Correction, PromptList;
     private static readonly ConditionalWeakTable<T2IParamInput, List<Image>> HeldImages = new();
+    private static readonly Regex Choice = new(@"(?<!\\)\{([^{}]*\|[^{}]*)\}");
 
     public override void PopulateMetadata()
     {
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Anima character and style references, separate reference guidance, APG/rescale, BF16 compute and sequential prompt batches. Native prompts, LoRAs, resolution, seeds, image-to-image and refiners stay in the normal SwarmUI workflow.";
         License = "MIT";
-        Version = "1.0.1";
+        Version = "1.0.2";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/Anima";
     }
 
@@ -56,6 +58,21 @@ public class AnimaExtension : Extension
             "0.5", Min: 0, Max: 1, Step: 0.05, Group: group, FeatureFlag: Feature, DependNonDefault: Reference.Type.ID, OrderPriority: -5));
         PromptList = T2IParamTypes.Register<string>(new("Anima Prompt List", "Extra scene prompts for Generate prompt batch. Import .txt files or a folder; one file is one complete prompt. The main prompt runs first, followed by the list with the same captured settings and reference.",
             "[]", ViewType: ParamViewType.BIG, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: 5, IntentionalUnused: true));
+        T2IParamInput.SpecialParameterHandlers.Add(input =>
+        {
+            if (input.Get(Enabled, false) && input.Get(T2IParamTypes.Model)?.ModelClass?.CompatClass?.ID == "anima")
+            {
+                foreach (var parameter in new[] { T2IParamTypes.Prompt, T2IParamTypes.NegativePrompt })
+                {
+                    string prompt = input.Get(parameter, "");
+                    while (Choice.IsMatch(prompt))
+                    {
+                        prompt = Choice.Replace(prompt, match => $"<random:{match.Groups[1].Value}>");
+                    }
+                    input.Set(parameter, prompt);
+                }
+            }
+        });
         WorkflowGenerator.AddModelGenStep(UseBf16, -3.1);
         // Hold prompt attachments before the generic text/reference encoder sees them.
         WorkflowGenerator.AddStep(HoldImages, -8.5);
