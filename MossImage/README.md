@@ -20,7 +20,7 @@ by a preset is removed for every other model, in the browser and on the server.
 - **SFT De-Band** (default on): MOSS-Image SFT draws faint vertical color stripes
   on skies, fog, walls and backdrops. The fix loads
   `MOSS_Image_SFT_DeBand_L37-41.safetensors` (MATLOWAI/MOSS-Image-SFT-DeBand,
-  Apache-2.0, part of the MOSS-Image Core Bundle), which reverts SFT layers 37-41
+  part of the MOSS-Image Core Bundle), which reverts SFT layers 37-41
   to the Base weights. It is applied only to SFT models (file name contains
   `sft`); Base models never get it.
 - **Attention** (default PyTorch): with PyTorch attention the INT8 ConvRot files
@@ -119,8 +119,7 @@ them from it.
   steps, CFG 1; about 3 s).
 - Colors, clothes, expressions, lighting, seasons, backgrounds and style edit best.
   A second image's object is placed well; copying its exact look is weaker. SFT is
-  required (Base lost the subject in one of two tests). ChenkinLab's code is GPLv3;
-  no separate license is stated for the weights.
+  required (Base lost the subject in one of two tests).
 
 ## Color and depth control
 

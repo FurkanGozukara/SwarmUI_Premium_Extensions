@@ -39,7 +39,7 @@ FoleyExtension now normalizes mono/surround reference audio to H3's stereo layou
 RefMods. This prevents the reproducible one-channel `[356, 32]` / `[712, 32]` row-packing
 failure. Stereo input is unchanged. Update both this extension and FoleyExtension, then
 download the current MiniMax-H3 or FastH3 Omni Core Bundle (the three task adapters are
-included). The adapters retain their [asset licenses](https://huggingface.co/Alissonerdx/Minimax-H3-ComfyUI).
+included).
 
 ## Dragging from History (fixed in 1.22.4)
 

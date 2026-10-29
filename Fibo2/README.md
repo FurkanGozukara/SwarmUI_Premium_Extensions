@@ -56,8 +56,7 @@ Fibo 2.0 Core Bundle.
 
 Bria made Edit Turbo for editing; it also renders text to image very well,
 lettering included. About 1 MP is the trained size (1024x1024, 1424x800,
-1248x832); 2 MP text to image also works well with both models. Fibo 2.0 is
-licensed CC BY-NC 4.0 (non-commercial).
+1248x832); 2 MP text to image also works well with both models.
 
 ## Prompting
 
