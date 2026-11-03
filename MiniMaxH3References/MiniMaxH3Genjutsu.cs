@@ -17,23 +17,29 @@ public partial class MiniMaxH3ReferencesExtension
 {
     private static T2IRegisteredParam<bool> GenjutsuEnabled, GenjutsuMatchAspect, GenjutsuAutoDescribe, GenjutsuLockAudio;
     private static T2IRegisteredParam<string> GenjutsuTarget, GenjutsuBackground, GenjutsuSpeech, GenjutsuSpeechLanguage, GenjutsuSamModel, GenjutsuDescribeModel;
-    private static T2IRegisteredParam<string> GenjutsuMethod, GenjutsuCharacterLora, GenjutsuMotionLora, GenjutsuTrainingAdapter;
+    private static T2IRegisteredParam<string> GenjutsuMethod, GenjutsuCharacterLora, GenjutsuMotionLora, GenjutsuTrainingAdapter, GenjutsuFaceSwapLora;
     private static T2IRegisteredParam<double> GenjutsuGuideMegapixels, GenjutsuThreshold;
-    private static T2IRegisteredParam<int> GenjutsuMaskGrow;
+    private static T2IRegisteredParam<int> GenjutsuMaskGrow, GenjutsuEditMargin;
 
     /// <summary>Feature id advertised when the ComfyUI backend has the Genjutsu nodes (shipped by FurkanGozukara/FoleyExtension).</summary>
     public const string GenjutsuFeatureId = "minimax_h3_genjutsu";
 
     /// <summary>SAM 3.1 checkpoint (Comfy-Org/sam3.1) and the local vision LLM of Auto Describe (Qwen Image 2.1's Qwen3-VL 8B encoder).</summary>
     public const string GenjutsuSamDefault = "sam3.1_multiplex_fp16.safetensors", GenjutsuDescribeDefault = "qwen3vl_8b_int8_convrot.safetensors";
-    public const string GenjutsuOriginal = "original Genjutsu", GenjutsuTask = "Genjutsu + task LoRA", GenjutsuAligned = "aligned guide + task LoRA";
+    public const string GenjutsuOriginal = "original Genjutsu", GenjutsuTask = "Genjutsu + task LoRA", GenjutsuAligned = "aligned guide + task LoRA",
+        GenjutsuMasked = "masked edit", GenjutsuFaceSwap = "face swap LoRA";
+
+    /// <summary>Feature id of the masked video edit nodes (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
+    public const string MaskedEditFeatureId = "minimax_h3_masked_edit";
     public const string GenjutsuCharacterDefault = "minimax_h3_character_swap_v1.1_ref2va_fro.safetensors",
         GenjutsuMotionDefault = "minimax_h3_motion_transfer_v1.0_ref2va.safetensors",
-        GenjutsuAdapterDefault = "minimax_h3_ref2va_training_adapter_v2.safetensors";
+        GenjutsuAdapterDefault = "minimax_h3_ref2va_training_adapter_v2.safetensors",
+        GenjutsuFaceSwapDefault = "SS_FaceSwap_MiniMax_H3_REF2VA.safetensors";
 
     private sealed class GenjutsuState
     {
-        public string Guide, AudioLock;
+        public string Guide, AudioLock, MaskedEdit;
+        public JArray ClipFrames;
         public bool SoundtrackLogged;
     }
 
@@ -43,6 +49,7 @@ public partial class MiniMaxH3ReferencesExtension
     {
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesH3GenjutsuMotionGuide"] = GenjutsuFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesH3GenjutsuApply"] = "minimax_h3_genjutsu_apply";
+        ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3MaskedVideoEdit"] = MaskedEditFeatureId;
         T2IParamGroup group = new("MiniMax H3 Genjutsu", Open: true, OrderPriority: 8.1,
             Description: "Replace the person in a video with your character. Turn on MiniMax H3 References, attach the clip as @video1 and the new character as @image1, "
                 + "then Generate. SAM 3.1 finds the performer in every frame and inverts only the performer, so MiniMax H3 copies the motion, timing, camera and lip movements "
@@ -57,8 +64,9 @@ public partial class MiniMaxH3ReferencesExtension
         }
         GenjutsuEnabled = Reg<bool>("MiniMax H3 Genjutsu", "Swap the performer of @video1 for the character of @image1. Needs MiniMax H3 References on, a MiniMax H3 model, the clip as the first reference video and the character as the first prompt image.", "false", -10);
         dep = GenjutsuEnabled.Type.ID;
-        GenjutsuMethod = Reg<string>("Genjutsu Method", "Original uses the inverted native reference. Task LoRA strengthens character transfer with the same guide. Aligned guide uses the source frames on H3's output timeline and a task LoRA; it needs more tokens and uses dense INT8 attention. Compare motion and likeness on your clip.",
-            GenjutsuOriginal, -9.95, values: _ => [GenjutsuOriginal, GenjutsuTask, GenjutsuAligned]);
+        GenjutsuMethod = Reg<string>("Genjutsu Method", "Original uses the inverted native reference. Task LoRA strengthens character transfer with the same guide. Aligned guide uses the source frames on H3's output timeline and a task LoRA; it needs more tokens and uses dense INT8 attention. "
+            + "Masked edit regenerates only the target (shown to H3 as a grey figure) and keeps every other pixel of the clip exactly; the target can be a person or an object (eg 'car'). Face swap LoRA keeps the clip and changes only the face to the one in @image1. Compare motion and likeness on your clip.",
+            GenjutsuOriginal, -9.95, values: _ => [GenjutsuOriginal, GenjutsuTask, GenjutsuAligned, GenjutsuMasked, GenjutsuFaceSwap]);
         GenjutsuBackground = Reg<string>("Genjutsu Background", "'video (character replacement)' keeps the clip's location, lighting and framing and replaces only the performer. 'image (motion transfer)' keeps the character image's background and takes only the motion from the clip.",
             "video (character replacement)", -9.9, values: _ => ["video (character replacement)", "image (motion transfer)"]);
         GenjutsuTarget = Reg<string>("Genjutsu Target", "Who to replace, as SAM 3.1 text: 'person' for one person; 'man in red:1' or 'man:1' picks one of several. One phrase only.", "person", -9.8);
@@ -71,11 +79,13 @@ public partial class MiniMaxH3ReferencesExtension
         GenjutsuGuideMegapixels = Reg<double>("Genjutsu Motion Guide Megapixels", "Size of the inverted motion guide. 0.15 is fast and keeps lip sync; 0.3-0.4 shows hands, face and background in more detail and costs more tokens.", "0.15", -9.3, 0.05, 1, 0.01);
         GenjutsuThreshold = Reg<double>("Genjutsu Detection Threshold", "SAM 3.1 detection score threshold. Lower it when the performer is missed in some frames.", "0.5", -9.2, 0.05, 0.95, 0.01, advanced: true);
         GenjutsuMaskGrow = Reg<int>("Genjutsu Mask Grow", "Grow the performer mask by this many pixels so hair and loose clothing edges are inverted too.", "0", -9.1, 0, 64, 1, advanced: true);
+        GenjutsuEditMargin = Reg<int>("Genjutsu Edit Margin", "Masked edit only: grow the regenerated region by this many output pixels around the target, so a bigger costume, long hair or a hat fits. Everything outside it stays the original clip.", "32", -9.05, 0, 256, 1, advanced: true);
         GenjutsuSamModel = Reg<string>("Genjutsu SAM Model", "SAM 3.1 checkpoint in Models/Stable-Diffusion (MiniMax-H3 Core Bundle).", GenjutsuSamDefault, -9, advanced: true);
         GenjutsuDescribeModel = Reg<string>("Genjutsu Describe Model", "Qwen3-VL text encoder used by Auto Describe (MiniMax-H3 Core Bundle, also the Qwen Image 2.1 encoder).", GenjutsuDescribeDefault, -8.9, advanced: true);
         GenjutsuCharacterLora = Reg<string>("Genjutsu Character LoRA", "Character Swap v1.1 for video-background character replacement; loaded at strength 1. MiniMax-H3 Core Bundle.", GenjutsuCharacterDefault, -8.8, advanced: true);
         GenjutsuMotionLora = Reg<string>("Genjutsu Motion LoRA", "Motion Transfer v1.0 for image-background motion transfer; loaded after training adapter V2 at strength 1.", GenjutsuMotionDefault, -8.7, advanced: true);
         GenjutsuTrainingAdapter = Reg<string>("Genjutsu Training Adapter", "Training adapter V2 used with the Motion Transfer LoRA. Character Swap does not load it.", GenjutsuAdapterDefault, -8.6, advanced: true);
+        GenjutsuFaceSwapLora = Reg<string>("Genjutsu Face Swap LoRA", "FaceSwap LoRA for the face swap method, loaded at strength 1 (trigger word Faceswap, added for you). MiniMax-H3 Core Bundle.", GenjutsuFaceSwapDefault, -8.5, advanced: true);
     }
 
     /// <summary>Called by ApplyReferences before it creates the MiniMax H3 reference node: reference video 1 becomes the SAM 3.1 motion guide,
@@ -187,7 +197,7 @@ public partial class MiniMaxH3ReferencesExtension
         }
         string prompt = g.CreateNode("SECoursesH3GenjutsuPrompt", promptInputs);
         inputs["prompt"] = WorkflowGenerator.NodePath(prompt, 0);
-        GenjutsuStates.AddOrUpdate(g, new GenjutsuState() { Guide = guide });
+        GenjutsuStates.AddOrUpdate(g, new GenjutsuState() { Guide = guide, ClipFrames = clipFrames });
         Logs.Info($"MiniMax H3 Genjutsu: @video1 becomes the SAM 3.1 motion guide ('{g.UserInput.Get(GenjutsuTarget, "person")}', {background}, {g.UserInput.Get(GenjutsuGuideMegapixels, 0.15)} MP), length from the clip, Auto Describe {(describe ? "on" : "off")}.");
     }
 
@@ -201,6 +211,26 @@ public partial class MiniMaxH3ReferencesExtension
         string method = g.UserInput.Get(GenjutsuMethod, GenjutsuOriginal);
         if (method == GenjutsuOriginal)
         {
+            return;
+        }
+        if (method == GenjutsuMasked)
+        {
+            // Encode the clip into the video stream and regenerate only the target's cells (the audio lock's audio mask is kept).
+            if (!g.Features.Contains(MaskedEditFeatureId))
+            {
+                throw new SwarmUserErrorException("Genjutsu masked edit needs the updated ComfyUI-TeaCache nodes. Run Windows_Install_or_Update_SwarmUI.bat and restart the backend.");
+            }
+            state.MaskedEdit = g.CreateNode("MiniMaxH3MaskedVideoEdit", new JObject()
+            {
+                ["av_latent"] = g.CurrentMedia.Path,
+                ["vae"] = g.CurrentVae.Path,
+                ["images"] = state.ClipFrames,
+                ["mask"] = WorkflowGenerator.NodePath(state.Guide, 1),
+                ["grow_pixels"] = g.UserInput.Get(GenjutsuEditMargin, 32),
+                ["hold_frames"] = 2,
+                ["edge_feather"] = 8
+            });
+            g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(state.MaskedEdit, 0));
             return;
         }
         if (!g.Features.Contains("minimax_h3_genjutsu_apply"))
@@ -218,7 +248,8 @@ public partial class MiniMaxH3ReferencesExtension
             ["background"] = g.UserInput.Get(GenjutsuBackground, "video (character replacement)"),
             ["character_lora"] = g.UserInput.Get(GenjutsuCharacterLora, GenjutsuCharacterDefault),
             ["motion_lora"] = g.UserInput.Get(GenjutsuMotionLora, GenjutsuMotionDefault),
-            ["training_adapter"] = g.UserInput.Get(GenjutsuTrainingAdapter, GenjutsuAdapterDefault)
+            ["training_adapter"] = g.UserInput.Get(GenjutsuTrainingAdapter, GenjutsuAdapterDefault),
+            ["face_swap_lora"] = g.UserInput.Get(GenjutsuFaceSwapLora, GenjutsuFaceSwapDefault)
         });
         g.CurrentModel = g.CurrentModel.WithPath(WorkflowGenerator.NodePath(apply, 0));
         g.FinalPrompt = WorkflowGenerator.NodePath(apply, 1);
@@ -251,6 +282,27 @@ public partial class MiniMaxH3ReferencesExtension
         g.FinalPrompt = WorkflowGenerator.NodePath(state.AudioLock, 0);
         g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(state.AudioLock, 1));
         Logs.Info("MiniMax H3 Genjutsu locked the clip's soundtrack into the audio stream.");
+    }
+
+    /// <summary>After the decode (4.4, before Video Face Inpainting): a masked edit pastes the regenerated cells over the clip's own
+    /// frames, so everything outside the target is the untouched source.</summary>
+    private static void ApplyGenjutsuMaskedComposite(WorkflowGenerator g)
+    {
+        if (!GenjutsuStates.TryGetValue(g, out GenjutsuState state) || state.MaskedEdit is null)
+        {
+            return;
+        }
+        if (g.CurrentMedia is null || !g.CurrentMedia.IsRawMedia || g.CurrentMedia.DataType == WGNodeData.DT_AUDIO)
+        {
+            throw new SwarmReadableErrorException($"Genjutsu masked edit expected decoded video frames but received {g.CurrentMedia?.DataType}.");
+        }
+        string composite = g.CreateNode("MiniMaxH3MaskedEditComposite", new JObject()
+        {
+            ["images"] = g.CurrentMedia.Path,
+            ["canvas_frames"] = WorkflowGenerator.NodePath(state.MaskedEdit, 2),
+            ["composite_mask"] = WorkflowGenerator.NodePath(state.MaskedEdit, 1)
+        });
+        g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(composite, 0));
     }
 
     /// <summary>The Genjutsu output length (the clip's usable frame count), when Genjutsu built this generation.</summary>

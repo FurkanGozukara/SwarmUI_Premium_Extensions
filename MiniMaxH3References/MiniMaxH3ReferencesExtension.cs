@@ -161,6 +161,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         WorkflowGenerator.AltImageToVideoPostHandlers.Add(ApplyInitAudioImageToVideo);
         WorkflowGenerator.AddStep(ExtractAudioOnly, 0.9);
         // after the video decode (1), before segmentation/save (5, 10): refine faces on the decoded frames
+        WorkflowGenerator.AddStep(ApplyGenjutsuMaskedComposite, 4.4);
         WorkflowGenerator.AddStep(ApplyVideoFaceInpaint, 4.5);
         WorkflowGenerator.AddStep(SaveAudioOnlyLossless, 9.9);
         // after both the base (10) and Image To Video (11) saves: put the user's own audio on the file
