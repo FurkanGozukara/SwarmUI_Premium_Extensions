@@ -157,6 +157,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         // Genjutsu locks the clip's own soundtrack the same way (Genjutsu and Init Audio exclude each other)
         WorkflowGenerator.AddStep(ApplyGenjutsuAudioLock, -5.05);
         WorkflowGenerator.AddStep(ApplyGenjutsuTaskGuide, -5.04);
+        WorkflowGenerator.AddStep(ApplyStoryScenes, -5.03);
         // the Image To Video pass builds its own conditioning inside CreateImageToVideo, hook it there
         WorkflowGenerator.AltImageToVideoPostHandlers.Add(ApplyInitAudioImageToVideo);
         WorkflowGenerator.AddStep(ExtractAudioOnly, 0.9);

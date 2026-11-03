@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Text.RegularExpressions;
 using Newtonsoft.Json.Linq;
 using SwarmUI.Accounts;
 using SwarmUI.Builtin_ComfyUIBackend;
@@ -27,7 +28,7 @@ public partial class MiniMaxH3ReferencesExtension
     /// <summary>SAM 3.1 checkpoint (Comfy-Org/sam3.1) and the local vision LLM of Auto Describe (Qwen Image 2.1's Qwen3-VL 8B encoder).</summary>
     public const string GenjutsuSamDefault = "sam3.1_multiplex_fp16.safetensors", GenjutsuDescribeDefault = "qwen3vl_8b_int8_convrot.safetensors";
     public const string GenjutsuOriginal = "original Genjutsu", GenjutsuTask = "Genjutsu + task LoRA", GenjutsuAligned = "aligned guide + task LoRA",
-        GenjutsuMasked = "masked edit", GenjutsuFaceSwap = "face swap LoRA";
+        GenjutsuMasked = "masked edit", GenjutsuFaceSwap = "face swap LoRA", GenjutsuBackgroundReplace = "background replace";
 
     /// <summary>Feature id of the masked video edit nodes (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string MaskedEditFeatureId = "minimax_h3_masked_edit";
@@ -66,7 +67,7 @@ public partial class MiniMaxH3ReferencesExtension
         dep = GenjutsuEnabled.Type.ID;
         GenjutsuMethod = Reg<string>("Genjutsu Method", "Original uses the inverted native reference. Task LoRA strengthens character transfer with the same guide. Aligned guide uses the source frames on H3's output timeline and a task LoRA; it needs more tokens and uses dense INT8 attention. "
             + "Masked edit regenerates only the target (shown to H3 as a grey figure) and keeps every other pixel of the clip exactly; the target can be a person or an object (eg 'car'). Face swap LoRA keeps the clip and changes only the face to the one in @image1. Compare motion and likeness on your clip.",
-            GenjutsuOriginal, -9.95, values: _ => [GenjutsuOriginal, GenjutsuTask, GenjutsuAligned, GenjutsuMasked, GenjutsuFaceSwap]);
+            GenjutsuOriginal, -9.95, values: _ => [GenjutsuOriginal, GenjutsuTask, GenjutsuAligned, GenjutsuMasked, GenjutsuFaceSwap, GenjutsuBackgroundReplace]);
         GenjutsuBackground = Reg<string>("Genjutsu Background", "'video (character replacement)' keeps the clip's location, lighting and framing and replaces only the performer. 'image (motion transfer)' keeps the character image's background and takes only the motion from the clip.",
             "video (character replacement)", -9.9, values: _ => ["video (character replacement)", "image (motion transfer)"]);
         GenjutsuTarget = Reg<string>("Genjutsu Target", "Who to replace, as SAM 3.1 text: 'person' for one person; 'man in red:1' or 'man:1' picks one of several. One phrase only.", "person", -9.8);
@@ -110,7 +111,7 @@ public partial class MiniMaxH3ReferencesExtension
         }
         if (inputs["ref_images.ref_image_0"] is null && ActiveRefMods(g).Length == 0)
         {
-            throw new SwarmUserErrorException("MiniMax H3 Genjutsu needs the new character as the first prompt image (@image1) or as a RefMod.");
+            throw new SwarmUserErrorException("MiniMax H3 Genjutsu needs the new character (or, for background replace, the new background) as the first prompt image (@image1) or as a RefMod.");
         }
         string background = g.UserInput.Get(GenjutsuBackground, "video (character replacement)");
         string method = g.UserInput.Get(GenjutsuMethod, GenjutsuOriginal);
@@ -137,7 +138,8 @@ public partial class MiniMaxH3ReferencesExtension
         });
         inputs["ref_videos.ref_video_0"] = WorkflowGenerator.NodePath(guide, 0);
         inputs["ref_video_audios.ref_video_audio_0"] = WorkflowGenerator.NodePath(guide, 5);
-        if (method == GenjutsuAligned)
+        // Background replace holds the person's pixels and takes the new place from @image1: no reference video at all.
+        if (method == GenjutsuAligned || method == GenjutsuBackgroundReplace)
         {
             inputs.Remove("ref_videos.ref_video_0");
             inputs.Remove("ref_video_audios.ref_video_audio_0");
@@ -213,9 +215,10 @@ public partial class MiniMaxH3ReferencesExtension
         {
             return;
         }
-        if (method == GenjutsuMasked)
+        if (method == GenjutsuMasked || method == GenjutsuBackgroundReplace)
         {
             // Encode the clip into the video stream and regenerate only the target's cells (the audio lock's audio mask is kept).
+            bool backgroundReplace = method == GenjutsuBackgroundReplace;
             if (!g.Features.Contains(MaskedEditFeatureId))
             {
                 throw new SwarmUserErrorException("Genjutsu masked edit needs the updated ComfyUI-TeaCache nodes. Run Windows_Install_or_Update_SwarmUI.bat and restart the backend.");
@@ -226,9 +229,10 @@ public partial class MiniMaxH3ReferencesExtension
                 ["vae"] = g.CurrentVae.Path,
                 ["images"] = state.ClipFrames,
                 ["mask"] = WorkflowGenerator.NodePath(state.Guide, 1),
-                ["grow_pixels"] = g.UserInput.Get(GenjutsuEditMargin, 32),
-                ["hold_frames"] = 2,
-                ["edge_feather"] = 8
+                ["grow_pixels"] = backgroundReplace ? 8 : g.UserInput.Get(GenjutsuEditMargin, 32),
+                ["hold_frames"] = backgroundReplace ? 1 : 2,
+                ["edge_feather"] = backgroundReplace ? 3 : 8,
+                ["pixel_composite"] = backgroundReplace
             });
             g.CurrentMedia = g.CurrentMedia.WithPath(WorkflowGenerator.NodePath(state.MaskedEdit, 0));
             return;
@@ -286,6 +290,38 @@ public partial class MiniMaxH3ReferencesExtension
 
     /// <summary>After the decode (4.4, before Video Face Inpainting): a masked edit pastes the regenerated cells over the clip's own
     /// frames, so everything outside the target is the untouched source.</summary>
+    private static readonly Regex StoryScene = new(@"^[ \t]*-{3,}[ \t]*$", RegexOptions.Multiline);
+
+    /// <summary>A long video that develops: with Video Context Length set, --- lines in the prompt give each window its own scene (nothing changes without them).</summary>
+    private static void ApplyStoryScenes(WorkflowGenerator g)
+    {
+        if (!g.IsMiniMaxH3() || !g.UserInput.Contains(ComfyUIBackendExtension.VideoContextLength) || !g.UserInput.Contains(ComfyUIBackendExtension.VideoContextOverlap)
+            || !g.UserInput.TryGet(T2IParamTypes.Prompt, out string prompt) || !StoryScene.IsMatch(prompt))
+        {
+            return;
+        }
+        (JObject condNode, JArray _) = FindUpstream(g, g.FinalPrompt, "MiniMaxH3ReferenceToVideo", "MiniMaxH3ImageToVideo", "CLIPTextEncode");
+        if ($"{condNode?["class_type"]}" == "MiniMaxH3ReferenceToVideo")
+        {
+            return; // Reference runs keep their one prompt: their text is encoded with the reference images.
+        }
+        string story = g.CreateNode("SECoursesH3StoryWindows", new JObject()
+        {
+            ["positive"] = g.FinalPrompt,
+            ["clip"] = g.CurrentTextEnc.Path,
+            ["prompt"] = prompt,
+            ["enabled"] = true
+        });
+        g.FinalPrompt = WorkflowGenerator.NodePath(story, 0);
+        foreach (JProperty node in g.Workflow.Properties())
+        {
+            if ($"{node.Value["class_type"]}" == "MiniMaxH3ContextWindows")
+            {
+                node.Value["inputs"]["split_conds_to_windows"] = true;
+            }
+        }
+    }
+
     private static void ApplyGenjutsuMaskedComposite(WorkflowGenerator g)
     {
         if (!GenjutsuStates.TryGetValue(g, out GenjutsuState state) || state.MaskedEdit is null)
