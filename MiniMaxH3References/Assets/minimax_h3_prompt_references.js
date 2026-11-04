@@ -251,6 +251,9 @@ function applyGenjutsuToSpec(H3, spec, ctx) {
         spec.refVideos = spec.refVideos.slice(1);
         spec.keyframeVideoFrames = length;
     }
+    else if (ctx.param('genjutsumethod') === 'background replace') {
+        spec.refVideos = spec.refVideos.slice(1); // the clip is held in the latent, there is no reference video
+    }
     else {
         spec.refVideos[0] = {
             ...clip, width: Math.max(1, H3.pyRound(clip.width * scale)), height: Math.max(1, H3.pyRound(clip.height * scale)),
@@ -363,7 +366,7 @@ PromptTokenEstimators.push({
             label = audioOnly ? (hasRefs ? 'audio only with references' : 'audio only') : hasRefs ? 'reference to video' : 'text to video';
             if (referencesEnabled && !audioOnly && ctx.param('minimaxhgenjutsu') === true && spec.refVideos.length > 0) {
                 approximate = applyGenjutsuToSpec(H3, spec, ctx) || approximate;
-                label = 'Genjutsu character swap';
+                label = { 'background replace': 'Background replace', 'masked edit': 'Masked edit' }[ctx.param('genjutsumethod')] || 'Genjutsu character swap';
             }
         }
         if (initAudioData) {
