@@ -366,7 +366,7 @@ PromptTokenEstimators.push({
             label = audioOnly ? (hasRefs ? 'audio only with references' : 'audio only') : hasRefs ? 'reference to video' : 'text to video';
             if (referencesEnabled && !audioOnly && ctx.param('minimaxhgenjutsu') === true && spec.refVideos.length > 0) {
                 approximate = applyGenjutsuToSpec(H3, spec, ctx) || approximate;
-                label = { 'background replace': 'Background replace', 'masked edit': 'Masked edit' }[ctx.param('genjutsumethod')] || 'Genjutsu character swap';
+                label = { 'background replace': 'Background replace', 'masked edit': 'Masked edit', 'face swap LoRA': 'Face swap' }[ctx.param('genjutsumethod')] || 'Genjutsu character swap';
             }
         }
         if (initAudioData) {
@@ -386,6 +386,12 @@ PromptTokenEstimators.push({
                     approximate = true;
                 }
             }
+        }
+        // With context windows each window is one packed sequence: the limit applies per window, not to the whole video.
+        let windowFrames = Number(ctx.param('videocontextlength'));
+        if (windowFrames > 0 && ctx.param('videocontextoverlap') != null && spec.frames > windowFrames) {
+            spec.frames = windowFrames;
+            label = `${label} · per window`;
         }
         let estimate = H3.estimate(spec);
         estimate.approximate = estimate.approximate || approximate;
