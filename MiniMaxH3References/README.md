@@ -3,6 +3,24 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## Videos decoded at the output size (1.25.0)
+
+**MiniMax H3 Downscale Videos To Output** (on by default, beside Reference
+Image Size) decodes every reference video, including the Genjutsu and
+Background Replace clip, straight to the output's pixel area: the aspect ratio
+is kept and a smaller clip is never enlarged. Trim window, frame selection,
+the 24 FPS frame blending and the soundtrack are the same as before; only the
+size the frames are held at changes. Before, each video was first decoded at
+its full size and frame rate in 32-bit float, so a 10.8 s 4K 60 FPS clip took
+about 64 GB of RAM (about 129 GB at the peak); now it takes about 6 GB. Turn it
+off to get the previous full-size decoding. Needs the FoleyExtension node
+`SECoursesLoadVideoB64AtSize`; with an older backend the extension logs a
+warning and decodes at full size. Images keep their own Reference Image Size.
+
+In Genjutsu masked edit and Background Replace, a clip whose aspect ratio
+differs from the output by more than 2 % (Match Clip Aspect off) is now
+centre-cropped to the output's shape instead of stretched.
+
 ## Optional LightVAE video decoder (1.24.1)
 
 **MiniMax H3 Video Decoder** selects None (original), INT8 ConvRot LightVAE or

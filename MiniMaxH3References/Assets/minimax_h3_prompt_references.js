@@ -332,6 +332,7 @@ PromptTokenEstimators.push({
             spec.frames = H3.alignFrames(Number(ctx.param('textvideoframes')) || 124);
             spec.audioOnly = audioOnly;
             spec.refImageSize = ctx.param('minimaxhreferenceimagesize') || 'match';
+            spec.downscaleVideos = ctx.param('minimaxhdownscalevideostooutput') !== false;
             spec.maxSeconds = Number(ctx.param('minimaxhreferencemaxseconds')) || 15;
             let referencesEnabled = ctx.param('minimaxhreferences') !== false;
             for (let container of ctx.promptImages) {

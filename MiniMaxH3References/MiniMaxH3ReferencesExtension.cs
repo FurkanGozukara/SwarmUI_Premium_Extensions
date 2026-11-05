@@ -23,6 +23,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     private static bool _initialized;
     private static T2IRegisteredParam<bool> Enabled;
     private static T2IRegisteredParam<string> ReferenceImageSize;
+    private static T2IRegisteredParam<bool> DownscaleVideos;
     private static T2IRegisteredParam<T2IModel> VideoDecoder;
     private static T2IRegisteredParam<double> ReferenceMaxSeconds;
     private static T2IRegisteredParam<string> ReferenceVideoTrims;
@@ -83,6 +84,9 @@ public partial class MiniMaxH3ReferencesExtension : Extension
     /// <summary>Feature id advertised when the ComfyUI backend has the MiniMax H3 face inpaint nodes (shipped by FurkanGozukara/ComfyUI-TeaCache).</summary>
     public const string FaceInpaintFeatureId = "minimax_h3_face_inpaint";
 
+    /// <summary>Feature id advertised when the backend can decode a reference video straight to the output size (FoleyExtension's SECoursesLoadVideoB64AtSize).</summary>
+    public const string VideoAtSizeFeatureId = "secourses_video_at_size";
+
     /// <summary>Tested default YOLO face model of the face pass (the same default as the SECourses ComfyUI presets).</summary>
     public const string DefaultFaceDetector = "yolov9e-face-lindevs.pt";
 
@@ -98,7 +102,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Adds a prompt media uploader for every model (image / video / audio attachment cards with a waveform audio player, video previews, an exact-window trim uploader, trimming of attached cards in place, drag-to-reorder, paste and drop, the inputs browser, and LTX 2.5 Audio To Video source-audio hints), the complete MiniMax H3 reference workflow, a unified prompt uploader for up to nine images, three videos, and three audio files (with colored @image1 / @video1 / @audio1 prompt tokens and autocomplete), a single-reference trim uploader with an exact start/end window, explicit video/audio sampling shift overrides, audio-only generation on a 32x32 video canvas, native SOL attention, FirstBlockCache and audio-driven latent continuation, an exact-math low VRAM mode, and an optional Video Face Inpainting pass (YOLO face tracking of one or several ranked faces, H3 img2img face regeneration with locked audio, geometry-locked and hallucination-guarded stitching), each with a one-click parameter, MiniMax H3 Genjutsu (replace the person in a video with the character of an image: SAM 3.1 inverted motion guide, automatic Genjutsu prompt with a local Qwen3-VL describer, the clip's own length, aspect and soundtrack), plus an Init Audio group: an optional soundtrack the generated video follows exactly (lipsync, timing) for text-only, reference, and image-to-video MiniMax H3 generation, and a live token meter beside the prompt (estimated packed-sequence tokens vs the model's documented budget, updated as resolution, duration, references, init image / audio change).";
         License = "MIT";
-        Version = "1.24.1";
+        Version = "1.25.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions";
     }
 
@@ -130,6 +134,7 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         ComfyUIBackendExtension.NodeToFeatureMap["SECoursesH3ReferenceToVideo"] = "minimax_h3_stereo_refs";
         ComfyUIBackendExtension.NodeToFeatureMap["SEH3LongLipSync"] = LongLipSyncFeatureId;
         ComfyUIBackendExtension.NodeToFeatureMap["SECodeFormerMouthImages"] = MouthPassFeatureId;
+        ComfyUIBackendExtension.NodeToFeatureMap["SECoursesLoadVideoB64AtSize"] = VideoAtSizeFeatureId;
         RegisterParameters();
         RegisterFaceInpaintParameters();
         RegisterMouthPassParameters();
@@ -337,6 +342,11 @@ public partial class MiniMaxH3ReferencesExtension : Extension
             "Match limits each image reference to the output pixel area. Max preserves more reference detail and uses more memory and time.",
             "match", GetValues: _ => ["match", "max"], FeatureFlag: "comfyui", Group: group,
             OrderPriority: -9, DependNonDefault: Enabled.Type.ID));
+        DownscaleVideos = T2IParamTypes.Register<bool>(new(
+            "MiniMax H3 Downscale Videos To Output",
+            "On (default): every reference video, the Genjutsu / Background Replace clip included, is decoded straight to the output's pixel area (aspect ratio kept, never enlarged), so a 4K clip never sits in memory at 4K. Off: each video is first decoded at its full size and frame rate, as before; a 10 second 4K 60 FPS clip then needs over 64 GB of RAM.",
+            "true", IgnoreIf: "true", FeatureFlag: "comfyui", Group: group,
+            OrderPriority: -8.95, DependNonDefault: Enabled.Type.ID));
         ReferenceMaxSeconds = T2IParamTypes.Register<double>(new(
             "MiniMax H3 Reference Max Seconds",
             "Maximum duration used from each reference video or audio file. Clean 2-15 second clips are the quality-tested recommendation, but longer references are allowed and may use substantially more memory and time.",
@@ -1295,6 +1305,12 @@ public partial class MiniMaxH3ReferencesExtension : Extension
         int audioReferenceIndex = 0;
         JArray genjutsuFrames = null, genjutsuAudio = null;
         Dictionary<int, (double Start, double End)> videoTrims = ParseVideoTrims(g.UserInput.Get(ReferenceVideoTrims, ""));
+        bool downscaleVideos = g.UserInput.Get(DownscaleVideos, true);
+        if (downscaleVideos && videos.Count > 0 && !audioOnly && !g.Features.Contains(VideoAtSizeFeatureId))
+        {
+            Logs.Warning("MiniMax H3 Downscale Videos To Output needs the SECoursesLoadVideoB64AtSize node (FoleyExtension). Run Windows_Install_or_Update_SwarmUI.bat; videos are decoded at full size until then.");
+            downscaleVideos = false;
+        }
         for (int i = 0; i < videos.Count; i++)
         {
             // The 'Add A Reference With Trim' uploader sends the untouched video plus a
@@ -1316,6 +1332,27 @@ public partial class MiniMaxH3ReferencesExtension : Extension
                     ["start_seconds"] = trimStart
                 });
                 inputs[$"ref_audios.ref_audio_{audioReferenceIndex++}"] = WorkflowGenerator.NodePath(soundtrack, 0);
+                continue;
+            }
+            if (downscaleVideos)
+            {
+                // The same trim, frames, 24 FPS blending and soundtrack as the chain below, decoded at the output's pixel area.
+                string sized = g.CreateNode("SECoursesLoadVideoB64AtSize", new JObject()
+                {
+                    ["video_base64"] = videos[i].AsBase64,
+                    ["start_seconds"] = trimStart,
+                    ["duration"] = trimSeconds,
+                    ["fps"] = 24.0,
+                    ["width"] = inputs["width"].DeepClone(),
+                    ["height"] = inputs["height"].DeepClone()
+                });
+                inputs[$"ref_videos.ref_video_{i}"] = WorkflowGenerator.NodePath(sized, 0);
+                inputs[$"ref_video_audios.ref_video_audio_{i}"] = WorkflowGenerator.NodePath(sized, 1);
+                if (i == 0)
+                {
+                    genjutsuFrames = WorkflowGenerator.NodePath(sized, 0);
+                    genjutsuAudio = WorkflowGenerator.NodePath(sized, 1);
+                }
                 continue;
             }
             string loaded = g.CreateNode("SwarmLoadVideoB64", new JObject()
