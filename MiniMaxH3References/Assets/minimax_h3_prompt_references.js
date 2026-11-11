@@ -276,7 +276,8 @@ const PromptTokenEstimators = [];
 /** MiniMax H3: reproduces the packed [text | references | audio | video] sequence ComfyUI builds (see minimax_h3_tokens.js). */
 PromptTokenEstimators.push({
     id: 'minimax-h3',
-    matches: (compat) => typeof compat === 'string' && compat.startsWith('minimax-h3'),
+    // Exact: MiniMax H3 Image ('minimax-h3-image') is an image model without this token layout.
+    matches: (compat) => compat === 'minimax-h3',
     async estimate(ctx) {
         let H3 = globalThis.SECoursesMiniMaxH3Tokens;
         if (!H3) {
@@ -1761,7 +1762,7 @@ function minimaxH3NodeGatedFeature(flag) {
         return [[], []];
     }
     let compat = typeof currentModelHelper != 'undefined' ? currentModelHelper.curCompatClass : null;
-    if (compat && compat.startsWith('minimax-h3')) {
+    if (compat === 'minimax-h3') {
         return [[flag], []];
     }
     return [[], [flag]];
@@ -1776,7 +1777,7 @@ function minimaxH3VideoModelSelected() {
         }
         let data = typeof modelsHelpers != 'undefined' ? modelsHelpers.getDataFor('Stable-Diffusion', select.value) : null;
         let compat = data?.compat_class ?? data?.modelClass?.compatClass?.id ?? '';
-        return `${compat}`.startsWith('minimax-h3');
+        return `${compat}` === 'minimax-h3';
     }
     catch (e) {
         return false;

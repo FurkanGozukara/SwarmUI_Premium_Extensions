@@ -3,6 +3,12 @@
 Furkan Gozukara's SwarmUI integration for the official ComfyUI MiniMax H3
 `MiniMaxH3ReferenceToVideo` node.
 
+## MiniMax H3 Image left to its own extension (1.25.1)
+
+The token meter and the H3-only controls now follow the MiniMax H3 video model class (`minimax-h3`) exactly. SwarmUI's
+MiniMax H3 Image models (`minimax-h3-image`) start with the same letters and showed the video token meter and controls;
+they use the MiniMaxH3Image extension instead.
+
 ## Videos decoded at the output size (1.25.0)
 
 **MiniMax H3 Downscale Videos To Output** (on by default, beside Reference
