@@ -32,6 +32,16 @@ enhancer off keep image 1's shape. **Exact** always uses Width x Height. Set the
 the presets use 16.78 MP (4096 x 4096). Image metadata lists the Width and Height you set; the image itself has the
 final size.
 
+## KJNodes empty image (text to image)
+
+**MiniMax H3 Image KJNodes Empty Image** (off by default; on in the preset "MiniMax H3 Image - Text To Image 16 MP - KJNodes
+Empty Image - 6 Steps - 261114") routes text to image through KJNodes' `MiniMaxH3PromptWeight` node in its "text with
+empty image" mode: for the first part of the sampling (**Empty Image Start** 0 to **End** 0.25, the first 2 of the 6
+steps, KJNodes' defaults) the model also sees an empty black picture, which on many images gives cleaner skin, hands and
+fine detail. The composition differs from plain text to image, like a new seed. With prompt images attached the normal
+edit runs. It needs ComfyUI-KJNodes (13 November 2026 or newer) on the ComfyUI backend; our ComfyUI installer installs it,
+and without it the generation stops with a message. Switched off, the graph is exactly the one of version 1.0.0.
+
 ## Images and prompting
 
 Attach up to 16 images to the prompt. `@image1`, `@image2`, ... follow attachment order and become the model's

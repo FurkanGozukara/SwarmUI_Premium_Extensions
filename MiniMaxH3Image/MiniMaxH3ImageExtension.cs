@@ -18,6 +18,7 @@ namespace FurkanGozukara.SwarmExtensions.MiniMaxH3Image;
 public class MiniMaxH3ImageExtension : Extension
 {
     private const string Feature = "secourses_h3_image";
+    private const string KJFeature = "kjnodes_minimax_h3_prompt_weight";
     private const string InputError = "secourses_h3_image_input_error";
     private const string CompatId = "minimax-h3-image";
     private const string EnhancerDefault = "qwen3.5_9b_int8_convrot.safetensors";
@@ -27,6 +28,8 @@ public class MiniMaxH3ImageExtension : Extension
     private static readonly List<string> SizeModes = ["Auto: enhancer picks the aspect ratio (edits keep image 1's shape) at these megapixels", "Exact: always use the width and height above"];
     private static T2IRegisteredParam<bool> Enabled;
     private static T2IRegisteredParam<string> Enhance, SizeMode, EnhancerModel, PromptList;
+    private static T2IRegisteredParam<bool> KJEmptyImage;
+    private static T2IRegisteredParam<double> KJStart, KJEnd;
     private static readonly Regex ReferenceAlias = new(@"(?<![\w@])@(?:image|img|picture|pic)(\d+)\b", RegexOptions.IgnoreCase);
     private static readonly Regex Choice = new(@"(?<!\\)\{([^{}]*\|[^{}]*)\}");
 
@@ -35,13 +38,14 @@ public class MiniMaxH3ImageExtension : Extension
         ExtensionAuthor = "Furkan Gozukara";
         Description = "MiniMax H3 Image presets: MiniMax's official prompt enhancer run locally, the enhancer's aspect ratio at your megapixels, @image1-@image16 prompt images and sequential prompt batches, on SwarmUI's native MiniMax H3 Image workflow.";
         License = "MIT";
-        Version = "1.0.0";
+        Version = "1.1.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/MiniMaxH3Image";
     }
 
     public override void OnPreInit()
     {
         ComfyUIBackendExtension.NodeToFeatureMap["SEH3ImageSwarmEnhance"] = Feature;
+        ComfyUIBackendExtension.NodeToFeatureMap["MiniMaxH3PromptWeight"] = KJFeature;
     }
 
     public override void OnInit()
@@ -56,6 +60,12 @@ public class MiniMaxH3ImageExtension : Extension
             SizeModes[0], GetValues: _ => SizeModes, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -9));
         EnhancerModel = T2IParamTypes.Register<string>(new("MiniMax H3 Image Enhancer Model", "The Qwen3.5 9B text encoder file that runs the enhancer (INT8 ConvRot in the MiniMax-H3 Core Bundle, W4A8 in the Low VRAM Bundle). It is loaded only while the enhancer is on.",
             EnhancerDefault, GetValues: EnhancerModels, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -8, IsAdvanced: true));
+        KJEmptyImage = T2IParamTypes.Register<bool>(new("MiniMax H3 Image KJNodes Empty Image", "Text to image through KJNodes' MiniMax H3 Prompt Weight node in its 'text with empty image' mode: for the first part of the sampling the model also sees an empty black picture, which on many images gives cleaner skin, hands and fine detail. The composition differs from plain text to image, like a new seed. With prompt images attached the normal edit runs. Needs ComfyUI-KJNodes (13 November 2026 or newer) on the ComfyUI backend; our ComfyUI installer installs it.",
+            "false", IgnoreIf: "false", Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: -7));
+        KJStart = T2IParamTypes.Register<double>(new("MiniMax H3 Image Empty Image Start", "Start of the sampling range with the empty picture (KJNodes start_percent). Keep 0.",
+            "0", Min: 0, Max: 1, Step: 0.05, Group: group, FeatureFlag: Feature, DependNonDefault: KJEmptyImage.Type.ID, OrderPriority: -6.9, IsAdvanced: true));
+        KJEnd = T2IParamTypes.Register<double>(new("MiniMax H3 Image Empty Image End", "End of the sampling range with the empty picture (KJNodes end_percent). 0.25 = the first 2 of the 6 steps (KJNodes default).",
+            "0.25", Min: 0, Max: 1, Step: 0.05, Group: group, FeatureFlag: Feature, DependNonDefault: KJEmptyImage.Type.ID, OrderPriority: -6.8, IsAdvanced: true));
         PromptList = T2IParamTypes.Register<string>(new("MiniMax H3 Image Prompt List", "Extra prompts for Generate prompt batch. Add prompts or import .txt files or a folder; each file is one complete prompt. The main prompt runs first, then the list, with the same captured settings and attached images.",
             "[]", ViewType: ParamViewType.BIG, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: 5, IntentionalUnused: true));
         T2IParamInput.SpecialParameterHandlers.Add(PrepareInput);
@@ -180,6 +190,29 @@ public class MiniMaxH3ImageExtension : Extension
         }
         string node = g.CreateNode("SEH3ImageSwarmEnhance", inputs);
         encoder["inputs"][field] = WorkflowGenerator.NodePath(node, 0);
+        // KJNodes empty image (text to image only): KJNodes' MiniMax H3 Prompt Weight replaces the positive conditioning
+        // and the model; with prompt images the native edit conditioning stays.
+        if (g.UserInput.Get(KJEmptyImage, false) && encoder["inputs"]["minimax_refs"] is null)
+        {
+            if (!g.Features.Contains(KJFeature))
+            {
+                throw new SwarmUserErrorException("The MiniMax H3 Image KJNodes Empty Image preset needs ComfyUI-KJNodes (13 November 2026 or newer) on the ComfyUI backend. Run Windows_Install_Or_Update_ComfyUI.bat and restart SwarmUI.");
+            }
+            string kj = g.CreateNode("MiniMaxH3PromptWeight", new JObject()
+            {
+                ["model"] = g.CurrentModel.Path,
+                ["clip"] = encoder["inputs"]["clip"].DeepClone(),
+                ["text"] = WorkflowGenerator.NodePath(node, 0),
+                ["strength"] = 1.0,
+                ["width"] = WorkflowGenerator.NodePath(node, 1),
+                ["height"] = WorkflowGenerator.NodePath(node, 2),
+                ["mode"] = "text with empty image",
+                ["mode.start_percent"] = g.UserInput.Get(KJStart, 0.0),
+                ["mode.end_percent"] = g.UserInput.Get(KJEnd, 0.25)
+            });
+            g.CurrentModel = g.CurrentModel.WithPath([kj, 0]);
+            g.FinalPrompt = [kj, 1];
+        }
         // An init image (image to image) keeps its own size: only the native empty latent follows the enhancer.
         foreach (JProperty latent in g.Workflow.Properties().Where(p => p.Value.Value<string>("class_type") == "SwarmEmptyMiniMaxH3ImageLatent"))
         {
