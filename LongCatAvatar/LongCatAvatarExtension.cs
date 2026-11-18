@@ -40,7 +40,7 @@ public class LongCatAvatarExtension : Extension
     {
         ExtensionAuthor = "Furkan Gozukara";
         Description = "LongCat-Video-Avatar 1.6: attached audio + optional Init Image + prompt to a long lip-synced talking or singing video, with the official 8-step recipe, mouth enhancement and prompt batches.";
-        Version = "1.0.0";
+        Version = "1.1.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/LongCatAvatar";
     }
 
@@ -58,14 +58,17 @@ public class LongCatAvatarExtension : Extension
         AllParams.Add(Enabled.Type);
         Text("size_mode", "Size Mode", SizeModes[0], "Official buckets pick the size nearest to the Init Image aspect (or the Width x Height aspect without an image). Custom uses Width x Height, rounded to 16; the image is center-cropped to it.", SizeModes);
         Distilled = Toggle("distilled_8_steps", "Distilled 8 Steps", true, "Official LongCat Avatar 1.6 recipe: 8 distilled steps with the DMD + OPSD LoRAs, guidance 1. Off runs the base model with Base Steps and the guidance values (about 20x slower).");
-        Integer("mix_steps", "Mix Steps", 4, 0, 8, "Official 4: steps 1-4 use the DMD LoRA (x Mix Alpha), steps 5-8 the OPSD LoRA.", 1, true);
+        // "Distilled Step Count": parameter IDs keep only letters, so "Distilled Steps" would collide with "Distilled 8 Steps".
+        Text("distilled_steps", "Distilled Step Count", "8", "8 = official. 4 and 3 sample positions 0,2,4,6 and 0,3,6 of the same 8-step schedule: 2x and 2.7x fewer transformer passes, close to the 8-step look.", ["8", "4", "3"]);
+        Integer("mix_steps", "Mix Steps", 4, 0, 8, "Official 4: steps 1-4 of the 8-step schedule use the DMD LoRA (x Mix Alpha), steps 5-8 the OPSD LoRA (with 3 or 4 steps, the schedule positions below 4 use DMD).", 1, true);
         Number("mix_alpha", "Mix Alpha", 1, 0, 1, "DMD weight during the mixed steps (official 1.0). More DMD = steadier structure.", 0.05, true);
         Toggle("vocal_separation", "Vocal Separation", true, "Official Kim_Vocal_2 vocal separation before the Whisper features, so music and noise do not move the mouth. The saved video keeps the original audio.");
         Number("audio_start_seconds", "Audio Start Seconds", 0, 0, 100000, "Skip this much of the attached audio.");
         Number("duration_seconds", "Duration Seconds", 0, 0, 100000, "0 = the whole audio, otherwise this many seconds from Audio Start. The video length follows the audio.");
+        Toggle("shorten_last_segment", "Shorten Last Segment", false, "Samples the last segment only as long as the remaining audio needs (earlier segments are unchanged). Faster; the last frames can differ slightly.");
         Toggle("torch_compile", "Torch Compile", false, "Compiles each transformer block: the first run is slower, later runs are faster. Needs Triton on the backend.");
         Toggle("condition_cache", "Condition Cache", true, "Computes the reference and previous-frame tokens once per LoRA phase instead of every step. Same result, faster long videos.", true);
-        Text("attention", "Attention", "auto", "auto uses ComfyUI's attention (SageAttention with our launchers). sage forces SageAttention if installed; pytorch forces PyTorch attention.", ["auto", "sage", "pytorch"], true);
+        Text("attention", "Attention", "auto", "auto uses ComfyUI's attention (SageAttention with our launchers). sage forces SageAttention if installed; pytorch forces PyTorch attention; int8 (comfy kitchen) runs the long full-context self-attention with comfy-kitchen's INT8 kernel.", ["auto", "sage", "pytorch", "int8 (comfy kitchen)"], true);
         MouthEnhancement = Toggle("mouth_enhancement", "Mouth Enhancement", false, "Aligned CodeFormer mouth-only restoration of every frame before export. Needs facerestore_models/codeformer.pth and insightface/models/buffalo_l/det_10g.onnx on the backend.");
         Number("mouth_fidelity", "Mouth Fidelity", .9, 0, 1, "CodeFormer fidelity (0.9 recommended).", 0.01, false, MouthEnhancement);
         Number("mouth_blend", "Mouth Blend", .7, 0, 1, "Feathered mouth-only blend; 0 leaves the frames unchanged.", 0.01, false, MouthEnhancement);
@@ -152,7 +155,7 @@ public class LongCatAvatarExtension : Extension
         }
     }
 
-    /// <summary>Swarm does not know this architecture; the downloader's file names (LongCat_Video_Avatar_1.6_INT8_ConvRot, _BF16) identify it.</summary>
+    /// <summary>Swarm does not know this architecture; the downloader's file names (LongCat_Video_Avatar_1.6_INT8_ConvRot, _Premerged_DMD_OPSD_INT8_ConvRot, _BF16) identify it.</summary>
     private static bool IsLongCatModel(T2IModel model) =>
         model?.Name?.Replace('-', '_').Replace(' ', '_').Contains(ModelMarker, StringComparison.OrdinalIgnoreCase) == true;
 

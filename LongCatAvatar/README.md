@@ -11,9 +11,10 @@ saves an MP4 with your original audio into SwarmUI's History.
 ## How to use it
 
 1. Select a LongCat Video Avatar main model (the downloader saves
-   `LongCat_Video_Avatar_1.6_INT8_ConvRot.safetensors`, about twice as fast as the
-   BF16 file and with about half its memory; `LongCat_Video_Avatar_1.6_BF16` also
-   works).
+   `LongCat_Video_Avatar_1.6_Premerged_DMD_OPSD_INT8_ConvRot.safetensors`: INT8
+   ConvRot with the DMD LoRA merged in and an exact in-place switch to the OPSD
+   merge, so no LoRA work at run time; it runs the distilled mode with Mix Alpha 1.
+   `LongCat_Video_Avatar_1.6_INT8_ConvRot` and `_BF16` also work, with every option).
 2. Switch **LongCat Avatar Enabled** on.
 3. Attach the voice or song to the prompt (drag it into the prompt box). The
    video length follows the audio; **Duration Seconds** and **Audio Start
@@ -48,8 +49,13 @@ after the video in progress.
 - **Distilled 8 Steps** (on): the official 1.6 recipe. Off runs the 50-step base
   model with **Base Steps**, **Text Guidance** and **Audio Guidance** (about 20x
   slower).
+- **Distilled Step Count** 8 (official), 4 or 3: 4 and 3 sample positions 0, 2,
+  4, 6 and 0, 3, 6 of the same 8-step schedule, 2x and 2.7x fewer transformer
+  passes with a look close to 8 steps.
 - **Mix Steps** 4 and **Mix Alpha** 1: the official split between the DMD LoRA
   (first steps) and the OPSD LoRA (last steps).
+- **Shorten Last Segment** (off): samples the last segment only as long as the
+  remaining audio needs; earlier segments are unchanged.
 - **Vocal Separation** (on): music and background noise do not move the mouth;
   the saved video keeps the original audio.
 - **Mouth Enhancement** (off): aligned CodeFormer restoration of the mouth only,
@@ -60,7 +66,8 @@ after the video in progress.
 - **Torch Compile** (off): faster repeated runs after a slower first run; needs
   Triton.
 - Advanced (Display Advanced Options): Condition Cache (on, same result, faster
-  long videos), Attention (auto), Frames Per Segment 93, Context Frames 13,
+  long videos), Attention (auto; `int8 (comfy kitchen)` runs the long
+  self-attention with comfy-kitchen's INT8 kernel), Frames Per Segment 93, Context Frames 13,
   Reference Index 10, Mask Frame Range 0, Live Preview, CRF 17, Encoding Preset
   fast, Weight Dtype.
 
