@@ -1,0 +1,9 @@
+.viggle-batch { width: 100%; margin-top: .6rem; }
+.viggle-help { font-size: .87rem; line-height: 1.4; opacity: .9; margin: .4rem 0 .7rem; }
+.viggle-toolbar { display: flex; flex-wrap: wrap; gap: .35rem; margin: .65rem 0; }
+.viggle-button { font-size: .8rem; padding: .3rem .5rem; }
+.viggle-description { width: 100%; max-width: 100%; box-sizing: border-box; margin: .25rem 0; min-height: 4.5rem; resize: vertical; padding: .4rem; }
+.viggle-prompt-row { border-top: 1px solid #71809666; padding: .6rem 0; }
+.viggle-prompt-row strong { font-size: .85rem; overflow-wrap: anywhere; }
+.viggle-batch-status { font-size: .86rem; line-height: 1.4; margin-top: .5rem; }
+.viggle-batch [hidden] { display: none !important; }
