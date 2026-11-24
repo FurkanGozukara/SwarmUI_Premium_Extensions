@@ -24,16 +24,34 @@ History.
 4. Attach up to four photos of the new characters to the prompt. They are
    `@image1` to `@image4` in their order; a still **Init Image** comes after the
    prompt images.
-5. Write who becomes whom (swap), e.g. `Sam Altman (@image1) replaces the short man
+5. Swap with two or more people: press **Find the people in my video**. Every
+   actor of the (trimmed) video appears with their face; pick the photo that
+   replaces each one (`→ @image1`, ...) or leave **keep as is**. Keyframes are then
+   chosen and painted by face, and the prompt text becomes optional (it can still
+   describe the people or the scene).
+6. Or write who becomes whom (swap), e.g. `Sam Altman (@image1) replaces the short man
    under the left sombrero. Elon Musk (@image2) replaces the tall man in the
    center.`, or the change (edit), e.g. `Remove the wind turbines and make it a
    snowy winter day.`
-6. Generate. Start with a short clip (**Max Seconds**): each 14 second window
+7. Generate. Start with a short clip (**Max Seconds**): each 14 second window
    takes several minutes.
 
 **Seed** and ordinary **LoRAs** from SwarmUI's LoRA list apply (on the Viggle
 Remake model). Width, Height, Steps, CFG Scale and Video FPS do not: the canvas
 follows your video's aspect ratio and the output is 24 FPS.
+
+## Find the people in my video
+
+The button uploads the attached video (the same one the generation uses: the
+MiniMax H3 uploader's first video with its trim, else the first prompt video, else
+a video Init Image; Start Seconds and Max Seconds narrow it) to the ComfyUI backend
+through SwarmUI's ComfyBackendDirect connection, and the backend lists every actor
+by face in a few seconds. Your choices are stored in **Viggle Remake People** (face
+embeddings and photo numbers, the same data the ComfyUI button writes), so they
+stay with presets and History. Searching again keeps the choices of the same faces.
+**Clear people** goes back to text-only casting. Needs the ComfyBackendDirect
+permission (an ordinary local SwarmUI has it). Changing the photos afterwards keeps
+the numbers: if you remove a photo, check the choices again.
 
 ## Prompt batches
 
@@ -58,9 +76,13 @@ in progress.
   person (face, hair, body and outfit) from the photo or text.
 - **Start Seconds** and **Max Seconds** (0 = the whole video) select a part of the
   video, on top of the uploader's trim.
-- **Paint Enhance**: the official MiniMax H3 Image edit enhancer (fast by default)
-  writes the painter's caption for every keyframe. **Extra Instruction** adds words
-  to every keyframe's instruction.
+- **Paint Enhance** (Off by default): the painter gets each keyframe instruction as
+  written and keeps the frame's composition. The official MiniMax H3 Image edit
+  enhancer (with or without reasoning) rewrites it as a full caption; in our tests
+  it turned group shots into close-ups of one person, so it stays off.
+  **Extra Instruction** adds words to every keyframe's instruction.
+- **SAM 3.1** (SAM Model selector): segments each repainted person, so only that
+  person is pasted back into the keyframe.
 - **Prompt Mode**: Auto (Qwen3.5 9B watches each window and writes its prompt),
   Template (no language model) or "My text is the complete six-section prompt".
 - **Output Size**: 1080p (default), the render size, or the source resolution.
@@ -81,10 +103,14 @@ Existing local files only; nothing is downloaded by the extension.
 | Main model | `diffusion_models/viggle_remake_swap_pruned_int8_convrot.safetensors` or `viggle_remake_edit_pruned_int8_convrot.safetensors` |
 | Painter Model | `diffusion_models/minimax_h3_image_pruned_int8_convrot.safetensors` |
 | Image VAE | `VAE/MiniMaxH3/minimax_h3_image_vae_fp16.safetensors` |
-| Text Encoder | `text_encoders/qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors` |
+| Text Encoder | `text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors` |
 | Video VAE | `VAE/MiniMaxH3/minimax_h3_video_vae_int8_convrot.safetensors` |
 | Audio VAE | `VAE/MiniMaxH3/minimax_h3_audio_vae_fp32.safetensors` |
 | Writer Model | `text_encoders/qwen3.5_9b_int8_convrot.safetensors` |
+| SAM Model | `Stable-Diffusion/sam3.1_multiplex_fp16.safetensors` |
+
+The defaults are the INT8 ConvRot files of our downloader's bundles; any other
+local file of the same model can be selected.
 
 ## Requirements
 

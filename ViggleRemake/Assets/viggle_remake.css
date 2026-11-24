@@ -7,3 +7,11 @@
 .viggle-prompt-row strong { font-size: .85rem; overflow-wrap: anywhere; }
 .viggle-batch-status { font-size: .86rem; line-height: 1.4; margin-top: .5rem; }
 .viggle-batch [hidden] { display: none !important; }
+.viggle-cast { width: 100%; margin-top: .4rem; }
+.viggle-cast-rows { display: flex; flex-wrap: wrap; gap: .5rem; }
+.viggle-cast-row { display: flex; flex-direction: column; align-items: center; gap: .25rem; width: 6.6rem; padding: .3rem; border-radius: .5rem; background: #8080801a; border: 2px solid transparent; }
+.viggle-cast-row.viggle-cast-on { border-color: #3fbf6f; }
+.viggle-cast-face { width: 5.8rem; height: 5.8rem; border-radius: .4rem; object-fit: cover; }
+.viggle-cast-row select { width: 6rem; font-size: .8rem; }
+.viggle-cast-photo { width: 2.5rem; height: 2.5rem; border-radius: 50%; object-fit: cover; }
+.viggle-cast [hidden] { display: none !important; }

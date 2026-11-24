@@ -38,9 +38,9 @@ public class ViggleRemakeExtension : Extension
     private static readonly Regex TrimMatcher = new(@"^1:(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)$", RegexOptions.Compiled);
 
     private static T2IRegisteredParam<bool> Enabled, LowVram, Optimizations, VaeSpeedup;
-    private static T2IRegisteredParam<string> RefMode, SparseAttention, PromptList;
+    private static T2IRegisteredParam<string> Mode, RefMode, SparseAttention, PromptList, People;
     private static T2IRegisteredParam<double> CacheThreshold, StartSeconds, MaxSeconds;
-    private static T2IRegisteredParam<T2IModel> PainterModel, ImageVae, TextEncoder, VideoVae, AudioVae, WriterModel;
+    private static T2IRegisteredParam<T2IModel> PainterModel, ImageVae, TextEncoder, VideoVae, AudioVae, WriterModel, SamModel;
     private static readonly List<T2IParamType> AllParams = [];
     // Node inputs keyed by node class, then by the Python input name, so every control maps 1:1 onto its node input.
     private static readonly Dictionary<string, Dictionary<string, Func<T2IParamInput, JToken>>> NodeInputs = new()
@@ -55,7 +55,7 @@ public class ViggleRemakeExtension : Extension
     {
         ExtensionAuthor = "Furkan Gozukara";
         Description = "Viggle Remake: one click from your video, up to four photos and a sentence to a remade video (character swap or video edit), with automatically painted keyframes, written prompts, 1080p output and the original soundtrack.";
-        Version = "1.0.0";
+        Version = "1.1.0";
         ReadmeURL = "https://github.com/FurkanGozukara/SwarmUI_Premium_Extensions/tree/main/ViggleRemake";
     }
 
@@ -77,16 +77,17 @@ public class ViggleRemakeExtension : Extension
         AllParams.Add(Enabled.Type);
 
         // Plan
-        Text("SEViggleRemakePlan", "mode", "Mode", ModeAuto, "Character swap: the people you name become your characters (face, hair, body; clothes optional). Video edit: an object is removed or replaced, the background or the weather changes, the people stay. Auto: Swap for viggle_remake_swap files, Edit for viggle_remake_edit files.", [ModeAuto, .. Modes]);
+        Mode = Text("SEViggleRemakePlan", "mode", "Mode", ModeAuto, "Character swap: the people you name become your characters (face, hair, body; clothes optional). Video edit: an object is removed or replaced, the background or the weather changes, the people stay. Auto: Swap for viggle_remake_swap files, Edit for viggle_remake_edit files.", [ModeAuto, .. Modes]);
         Text("SEViggleRemakePlan", "quality", "Quality", Tiers[0], "1280x736 class (the canvas follows your video's aspect): the published high-resolution setting. 832x480 class: about 3x faster drafts.", Tiers);
         Text("SEViggleRemakePlan", "max_window_seconds", "Max Window Seconds", WindowChoices[0], "Longest single render. Longer clips are split at their cuts; a long shot continues seamlessly in hops. Auto: 345 frames on 32 GB+ cards, 175 on 24 GB, 124 below (with Low VRAM on).", WindowChoices);
         RefMode = Text("SEViggleRemakePlan", "references_mode", "References Mode", RefModes[0], "Auto: one keyframe per shot is chosen and painted by the local MiniMax H3 Image model from your photos and text. Finished reference frames: your attached images are frames of your video that you already edited; nothing is painted.", RefModes);
         Text("SEViggleRemakePlan", "outfit", "Outfit", Outfits[0], "Swap only. Keep the original clothes: the new person takes the role in the costume of the scene. Whole person: face, hair, build and outfit come from your photo or text (mascots, animals, invented characters).", Outfits);
+        People = Text("SEViggleRemakePlan", "people", "People", "", "Who becomes whom by face, set with the 'Find the people in my video' button: every actor of your video (found by face) and the attached photo that replaces them. With it the prompt text is optional. Empty: your text decides.");
         Integer("SEViggleRemakePlan", "max_cuts_per_window", "Max Cuts Per Window", 3, 0, 12, "Windows with many cuts drop or reorder short shots; at most this many cuts inside one render where the cuts allow.", true);
         StartSeconds = Number("SEViggleRemakePlan", "start_seconds", "Start Seconds", 0, 0, 36000, 0.01, "Skip the start of the video (added to the trim of the attached video).");
         MaxSeconds = Number("SEViggleRemakePlan", "max_seconds", "Max Seconds", 0, 0, 36000, 0.1, "0 = the whole video (after trimming). Each 14 s window takes several minutes: start with a short clip.");
         // Paint
-        Text("SEViggleRemakePaint", "enhance", "Paint Enhance", EnhanceModes[1], "The official MiniMax H3 Image edit enhancer (Qwen3.5 9B) turns each keyframe instruction into the detailed caption the painter was trained on. Fast is usually enough here.", EnhanceModes);
+        Text("SEViggleRemakePaint", "enhance", "Paint Enhance", EnhanceModes[2], "Off (default): the painter gets the keyframe instruction as written; it keeps each frame's composition, about 40 s per keyframe. The official MiniMax H3 Image edit enhancer (Qwen3.5 9B) rewrites it as a full caption: in our tests it painted the whole cast into close-ups that show one person (with reasoning, 3 minutes per keyframe) and misread the photos (fast).", EnhanceModes);
         Integer("SEViggleRemakePaint", "steps", "Paint Steps", 6, 1, 50, "MiniMax H3 Image is distilled for 6 steps.", true);
         Number("SEViggleRemakePaint", "paint_megapixels", "Paint Megapixels", 2.0, 0.5, 8.0, 0.1, "Painting size; the result is scaled to the render canvas. 2 MP keeps faces detailed.", true);
         Text("SEViggleRemakePaint", "extra_instruction", "Extra Instruction", "", "Optional words added to every keyframe's instruction, e.g. 'Elon Musk wears a black t-shirt'.");
@@ -111,10 +112,11 @@ public class ViggleRemakeExtension : Extension
         // Companion models: existing local files only.
         PainterModel = Model("Viggle Remake Painter Model", "MiniMax H3 Image model (diffusion_models) that paints the keyframes.", "minimax_h3_image_pruned_int8_convrot", "Stable-Diffusion", 100);
         ImageVae = Model("Viggle Remake Image VAE", "MiniMax H3 Image VAE for the painter.", "MiniMaxH3/minimax_h3_image_vae_fp16", "VAE", 101);
-        TextEncoder = Model("Viggle Remake Text Encoder", "MiniMax H3 Qwen3-VL 32B encoder (loaded as type minimax), shared by the painter and the video model.", "qwen3vl_32b_minimax_h3_nvfp4_awq", "Clip", 102);
+        TextEncoder = Model("Viggle Remake Text Encoder", "MiniMax H3 Qwen3-VL 32B encoder (loaded as type minimax), shared by the painter and the video model.", "qwen3vl_32b_minimax_h3_int8_convrot", "Clip", 102);
         VideoVae = Model("Viggle Remake Video VAE", "MiniMax H3 video VAE.", "MiniMaxH3/minimax_h3_video_vae_int8_convrot", "VAE", 103);
         AudioVae = Model("Viggle Remake Audio VAE", "MiniMax H3 audio VAE.", "MiniMaxH3/minimax_h3_audio_vae_fp32", "VAE", 104);
-        WriterModel = Model("Viggle Remake Writer Model", "Qwen3.5 9B (loaded as type minimax) for the paint enhancer and the prompt writer. Loaded only when Paint Enhance is on or Prompt Mode is Auto.", "qwen3.5_9b_int8_convrot", "Clip", 105);
+        WriterModel = Model("Viggle Remake Writer Model", "Qwen3.5 9B (loaded as type minimax) for the prompt writer, the optional paint enhancer and for checking which of your named people a keyframe shows. Loaded only when one of them needs it.", "qwen3.5_9b_int8_convrot", "Clip", 105);
+        SamModel = Model("Viggle Remake SAM Model", "SAM 3.1 checkpoint (Models/Stable-Diffusion, loaded with Load Checkpoint): segments each repainted person so only that person is pasted back into the keyframe.", "sam3.1_multiplex_fp16", "Stable-Diffusion", 106);
 
         PromptList = T2IParamTypes.Register<string>(new("Viggle Remake Prompt List", "Extra prompts for Generate prompt batch. Add prompts or import .txt files or a folder; each file is one complete prompt. The main prompt runs first, then the list, one video per prompt, with the same captured settings, video and photos.",
             "[]", ViewType: ParamViewType.BIG, Group: group, FeatureFlag: Feature, DependNonDefault: Enabled.Type.ID, OrderPriority: 120, IntentionalUnused: true));
@@ -220,6 +222,23 @@ public class ViggleRemakeExtension : Extension
         return null;
     }
 
+    /// <summary>The highest photo number the Find people JSON assigns to an actor ({"people":[{"photo":N,"embedding":[...]},...]}), 0 for none.</summary>
+    private static int HighestCastPhoto(string people)
+    {
+        if (string.IsNullOrWhiteSpace(people))
+        {
+            return 0;
+        }
+        try
+        {
+            return (JObject.Parse(people)["people"] as JArray ?? []).Where(p => p["embedding"] is JArray { Count: > 0 }).Select(p => p.Value<int?>("photo") ?? 0).DefaultIfEmpty(0).Max();
+        }
+        catch (Newtonsoft.Json.JsonException)
+        {
+            throw new SwarmUserErrorException("Viggle Remake People is not valid: run 'Find the people in my video' again (or clear it).");
+        }
+    }
+
     private static void Generate(WorkflowGenerator g)
     {
         if (!g.UserInput.Get(Enabled, false))
@@ -245,16 +264,26 @@ public class ViggleRemakeExtension : Extension
         }
         string text = g.UserInput.Get(T2IParamTypes.Prompt, "").Trim();
         bool ownRefs = g.UserInput.Get(RefMode, RefModes[0]) == RefModes[1];
-        if (text.Length == 0 && !ownRefs)
+        T2IModel mainModel = g.UserInput.Get(T2IParamTypes.Model);
+        string mode = g.UserInput.Get(Mode, ModeAuto);
+        if (mode == ModeAuto)
         {
-            throw new SwarmUserErrorException("Write who becomes whom in the prompt, e.g. 'Elon Musk (@image1) replaces the man on the right' (swap), or the change, e.g. 'remove the wind turbines' (edit).");
+            mode = mainModel.Name.Contains("edit", StringComparison.OrdinalIgnoreCase) ? Modes[1] : Modes[0];
+        }
+        int castPhoto = mode == Modes[0] && !ownRefs ? HighestCastPhoto(g.UserInput.Get(People, "")) : 0;
+        if (castPhoto > photos.Count)
+        {
+            throw new SwarmUserErrorException($"Viggle Remake People assigns @image{castPhoto}, but only {photos.Count} photo(s) are attached. Attach the photos again or run 'Find the people in my video' again.");
+        }
+        if (text.Length == 0 && !ownRefs && castPhoto == 0)
+        {
+            throw new SwarmUserErrorException("Write who becomes whom in the prompt, e.g. 'Elon Musk (@image1) replaces the man on the right' (swap), or the change, e.g. 'remove the wind turbines' (edit). For a swap you can instead press 'Find the people in my video' and pick a photo for each person.");
         }
         if (ownRefs && photos.Count == 0)
         {
             throw new SwarmUserErrorException("References Mode 'finished reference frames' needs your finished reference frames attached to the prompt as images.");
         }
 
-        T2IModel mainModel = g.UserInput.Get(T2IParamTypes.Model);
         g.FinalLoadedModel = mainModel;
         g.FinalLoadedModelList = [mainModel];
         long seed = g.UserInput.Get(T2IParamTypes.Seed);
@@ -343,10 +372,7 @@ public class ViggleRemakeExtension : Extension
         JObject planInputs = Inputs("SEViggleRemakePlan");
         planInputs["video"] = WorkflowGenerator.NodePath(video, 0);
         planInputs["text"] = text;
-        if ($"{planInputs["mode"]}" == ModeAuto)
-        {
-            planInputs["mode"] = mainModel.Name.Contains("edit", StringComparison.OrdinalIgnoreCase) ? Modes[1] : Modes[0];
-        }
+        planInputs["mode"] = mode;
         double startSeconds = g.UserInput.Get(StartSeconds, 0.0), maxSeconds = g.UserInput.Get(MaxSeconds, 0.0);
         planInputs["start_seconds"] = source.TrimStart + startSeconds;
         if (source.TrimEnd > 0)
@@ -366,6 +392,8 @@ public class ViggleRemakeExtension : Extension
         paintInputs["clip"] = clip;
         paintInputs["image_vae"] = g.CreateVAELoader(File(ImageVae));
         paintInputs["enhancer_clip"] = WorkflowGenerator.NodePath(writer, 0);
+        string sam = g.CreateNode("CheckpointLoaderSimple", new JObject() { ["ckpt_name"] = File(SamModel) });
+        paintInputs["sam_model"] = WorkflowGenerator.NodePath(sam, 0);
         paintInputs["seed"] = seed;
         string paint = g.CreateNode("SEViggleRemakePaint", paintInputs);
 
